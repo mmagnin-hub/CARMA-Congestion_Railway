@@ -91,36 +91,8 @@ class TravelerGroup(TravelerBase):
     
     def immediate_reward(self, system: 'System'):
         '''
-        TODO: add more matrix calculations to optimize
+        TODO: 
         '''
-
-        # OLD version (very slow)
-        # # compute zeta
-        # for u in range(self.U):
-        #   for k in range(self.K+1):
-        #     for t in range(self.T):
-        #       for b in range(self.K+1):
-        #         idx = u * (self.K+1) * self.T * (self.K+1) + k * self.T * (self.K+1) + t * (self.K+1) + b 
-        #         if b > system.b_star[t]: 
-        #           if t <= self.t_star:
-        #             self.zeta[idx] = -self.u_value[u] * np.abs(t - self.t_star) * self.beta # fast lane + early
-        #           else:
-        #             self.zeta[idx] = -self.u_value[u] * np.abs(t - self.t_star) * self.gamma # fast lane + late
-        #         elif b == system.b_star[t]:
-        #           if t <= self.t_star:
-        #             zeta_fast_lane = -self.u_value[u] * np.abs(t - self.t_star) * self.beta
-        #             zeta_slow_lane = -self.u_value[u] * (np.abs(t - self.t_star) * self.beta + system.slow_lane_queue[t] * self.alpha)
-        #             self.zeta[idx] = zeta_fast_lane * system.psi[t] + zeta_slow_lane * (1-system.psi[t]) # limit between fast/slow lane + early 
-        #           else:
-        #             zeta_fast_lane = -self.u_value[u] * np.abs(t - self.t_star) * self.gamma
-        #             zeta_slow_lane = -self.u_value[u] * (np.abs(t - self.t_star) * self.gamma + system.slow_lane_queue[t] * self.alpha)
-        #             self.zeta[idx] = zeta_fast_lane * system.psi[t] + zeta_slow_lane * (1-system.psi[t]) # limit between fast/slow lane + late
-        #         else:
-        #           if t <= self.t_star:
-        #             self.zeta[idx] = -self.u_value[u] * (np.abs(t - self.t_star) * self.beta + system.slow_lane_queue[t] * self.alpha) # slow lane + early
-        #           else:
-        #             self.zeta[idx] = -self.u_value[u] * (np.abs(t - self.t_star) * self.gamma + system.slow_lane_queue[t] * self.alpha) # slow lane + late
-
 
         # Precompute absolute time distance
         dt = np.abs(np.arange(self.T) - self.t_star)            # shape (T,)
@@ -216,7 +188,7 @@ class Traveler(TravelerBase):
         self.k_start = 0
         self.t: int = self.group.t_star
         self.b = 0
-        self.use_fast_lane: bool = False
+        self.enter_first_class: bool = False
 
     def action(self):
         idx_row = self.u_curr * (self.group.K+1) + self.k_curr
@@ -228,7 +200,7 @@ class Traveler(TravelerBase):
 
     def paid_karma_bid(self):
         """Deduct the bid from the traveler's karma balance."""
-        if self.use_fast_lane:
+        if self.enter_first_class:
             self.k_curr -= self.b
         return
     
@@ -257,20 +229,19 @@ class Traveler(TravelerBase):
 # ==============================================================
 
 class System: 
-    def __init__(self, fast_lane_capacity: int, slow_lane_capacity: int, K: int, T: int, travelers: list[Traveler]):
+    def __init__(self, first_class_capacity: int, second_class_capacity: int, K: int, T: int, travelers: list[Traveler]):
         '''
         TODO: describe all the variables
         '''
         # Fixed attributes
-        self.fast_lane_capacity = fast_lane_capacity
-        self.slow_lane_capacity = slow_lane_capacity
+        self.first_class_capacity = first_class_capacity
+        self.second_class_capacity = second_class_capacity
         self.K = K  
         self.T = T
         self.N = len(travelers)
 
         # Dynamic attributes
-        self.b_star = np.zeros(self.T)            
-        self.slow_lane_queue = np.zeros(self.T)    
+        self.b_star = np.zeros(self.T)                
         self.psi = np.zeros(self.T)        
         self.travelers = travelers
 
@@ -280,7 +251,7 @@ class System:
         TODO: 
         - Later : redistribute based on traveler states.
         """
-        total_karma_used = sum(traveler.b for traveler in self.travelers if traveler.use_fast_lane)
+        total_karma_used = sum(traveler.b for traveler in self.travelers if traveler.enter_first_class)
         karma_per_traveler = total_karma_used // len(self.travelers)
         leftover_karma = total_karma_used % len(self.travelers) 
         indexes_with_extra = set(random.sample(range(len(self.travelers)), leftover_karma))
@@ -289,28 +260,21 @@ class System:
             traveler.get_new_karma(karma_per_traveler + extra)
         return
 
-    def simulate_lane_queue(self):
+    def simulate_class_attribution(self):
         """
         Loop over each departure time group and compute:
-        - who enters the fast vs slow lane,
-        - how the queue evolves in the slow lane.
+        - who enters the 1st vs 2nd.
         """
         # Reset dynamic attributes
-        self.b_star = np.zeros(self.T)            
-        self.slow_lane_queue = np.zeros(self.T)    
+        self.b_star = np.zeros(self.T)              
         self.psi = np.zeros(self.T) 
-        for traveler in self.travelers: traveler.use_fast_lane = False
+        for traveler in self.travelers: traveler.enter_first_class = False
         # sort travelers for each departure time
         group_travelers = self.group_travelers_by_departure() 
         for t, travelers in enumerate(group_travelers): 
-            if len(travelers) != 0:
-                self.b_star[t], self.psi[t] = self.determine_threshold_bid(travelers)
-                self.assign_lanes(t, travelers)
-                count_slow_lane_users = sum(1 for traveler in travelers if not traveler.use_fast_lane)
-                self.update_queue_slow_lane(t, count_slow_lane_users)
-            else:
-                self.b_star[t], self.psi[t] = 0, 1
-                self.update_queue_slow_lane(t, 0)
+            self.b_star[t], self.psi[t] = self.determine_threshold_bid(travelers)
+            self.assign_lanes(t, travelers)
+            count_second_class_users = sum(1 for traveler in travelers if not traveler.enter_first_class)
         return 
     
     def group_travelers_by_departure(self):
@@ -324,15 +288,18 @@ class System:
 
     def determine_threshold_bid(self, travelers: list[Traveler]):
         """
-        Compute threshold bid (b_star) for the fast lane.
+        Compute threshold bid (b_star) for the first class.
         """
         bids = sorted([traveler.b for traveler in travelers], reverse=True)
-        if len(bids) > self.fast_lane_capacity:
-            b_star = bids[self.fast_lane_capacity - 1]
+        if len(bids) > self.first_class_capacity:
+            b_star = bids[self.first_class_capacity - 1]
             traveler_count_at_b_star = sum(1 for traveler in travelers if traveler.b == b_star)
             traveler_count_over_b_star = sum(1 for traveler in travelers if traveler.b > b_star)
-            free_spot_at_b_star = self.fast_lane_capacity - traveler_count_over_b_star
+            free_spot_at_b_star = self.first_class_capacity - traveler_count_over_b_star
             psi = free_spot_at_b_star/traveler_count_at_b_star 
+        elif len(bids) == 0:
+            b_star = 0
+            psi = 1
         else:
             b_star = bids[-1]
             psi = 1
@@ -340,28 +307,13 @@ class System:
     
     def assign_lanes(self, t, travelers):
         '''
-        Update each traveler's lane choice (use_fast_lane) based on b_star and psi.
+        Update each traveler's lane choice (enter_first_class) based on b_star and psi.
         '''
         for traveler in travelers:
             if traveler.b > self.b_star[t]:
-                traveler.use_fast_lane = True
+                traveler.enter_first_class = True
             elif traveler.b == self.b_star[t]:
-                # MM: How to ensure that it doesn't create queue ?
-                traveler.use_fast_lane = random.random() < self.psi[t] # MM: add a warning print
-        return
-    
-    def update_queue_slow_lane(self, t:int, inflow: int):
-        """
-        Simple bottleneck model for the slow lane.
-
-        - If inflow (n_slow_lane) > capacity: queue builds up.
-        - If inflow < capacity: queue dissipates gradually.
-        """
-        capacity = self.slow_lane_capacity
-        if t == 0:
-          self.slow_lane_queue[t] = max(0, 0 - (capacity - inflow))
-        else:
-          self.slow_lane_queue[t] = max(0, self.slow_lane_queue[t-1] - (capacity - inflow))
+                traveler.enter_first_class = random.random() < self.psi[t] # MM: add a warning print
         return
 
 

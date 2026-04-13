@@ -11,11 +11,8 @@ def main():
     T = 11            
     delta_t = 1          
     n_travelers = 600
-    # KZ: preset initial karma balance
-    K = 100 # if this is not enough, the code will crash because out of bound index in the policy state
+    K = 100 
     k_init = 10
-
-    # Group preference = t_star ∈ {0,1,...,T-1}
     n_groups = 1
     t_star = 8
     phi = np.array([[0.8, 0.2],
@@ -24,7 +21,6 @@ def main():
     u_value = np.array([1.0, 6.0]) # from the paper
     delta = 0.9 # discount factor  
     eta = 0.1 # smoothing weight
-    alpha = 1.6 # queueing weight
     beta = 1 # early arrival weight
     gamma = 4 # late arrival weight
 
@@ -42,12 +38,10 @@ def main():
         T=T,
         delta=delta,
         eta=eta,
-        alpha=alpha,
         beta=beta,
         gamma=gamma
     )
     groups.append(g1)
-    # You can create more groups here if needed
     # -------------------------------------------------------------
     # 3. Create travelers and split across groups
     # -------------------------------------------------------------
@@ -64,12 +58,12 @@ def main():
     # -------------------------------------------------------------
     # 4. Initialize the System with all travelers
     # -------------------------------------------------------------
-    fast_lane_capacity = 12 
-    slow_lane_capacity = 48
+    first_class_capacity = 12 
+    second_class_capacity = 48
 
     system = System(
-        fast_lane_capacity=fast_lane_capacity,
-        slow_lane_capacity=slow_lane_capacity,
+        first_class_capacity=first_class_capacity,
+        second_class_capacity=second_class_capacity,
         K=K,
         T=T,
         travelers=travelers
@@ -102,7 +96,7 @@ def main():
             tr.action()
 
         # 2. System queues
-        system.simulate_lane_queue()
+        system.simulate_class_attribution()
 
         # 3. Payment
         for tr in travelers:
