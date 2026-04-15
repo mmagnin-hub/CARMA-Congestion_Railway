@@ -21,6 +21,7 @@ def main():
     u_value = np.array([1.0, 6.0]) # from the paper
     delta = 0.9 # discount factor  
     eta = 0.1 # smoothing weight
+    alpha = 0.05 # crowdedness penalty weight
     beta = 1 # early arrival weight
     gamma = 4 # late arrival weight
 
@@ -32,12 +33,14 @@ def main():
     g1 = TravelerGroup(
         type_id=0,
         phi=phi,
+        delta_t= delta_t,
         t_star=t_star,
         u_value=u_value,
         K=K,
         T=T,
         delta=delta,
         eta=eta,
+        alpha=alpha,
         beta=beta,
         gamma=gamma
     )
@@ -51,7 +54,7 @@ def main():
     traveler_id = 0
     for group in groups:
         for _ in range(per_group):
-            traveler = Traveler(group=group, k_init=k_init, delta_t=delta_t, id=traveler_id)
+            traveler = Traveler(group=group, k_init=k_init, id=traveler_id)
             travelers.append(traveler)
             traveler_id += 1
 

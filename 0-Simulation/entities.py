@@ -18,13 +18,14 @@ class TravelerBase(ABC):
 # TravelerGroup (shared type-level parameters and learning)
 # ==============================================================
 class TravelerGroup(TravelerBase):
-    def __init__(self, type_id: int, phi: np.ndarray, t_star: int, u_value: np.ndarray, K: int, T: int, delta: float=0.9, eta: float=0.1, alpha: float=42, beta: float=42, gamma: float=42):
+    def __init__(self, type_id: int, phi: np.ndarray,delta_t: int, t_star: int, u_value: np.ndarray, K: int, T: int, delta: float=0.9, eta: float=0.1, alpha: float=42, beta: float=42, gamma: float=42):
         '''
         TODO: describe all the variables
         '''
         # Fixed attributes
         super().__init__(type_id)
         self.phi = np.array(phi)
+        self.delta_t = delta_t
         self.t_star = t_star
         self.u_value = np.array(u_value)
         self.delta = delta
@@ -81,7 +82,7 @@ class TravelerGroup(TravelerBase):
         self.Q = self.zeta + self.delta * np.dot(self.P, self.V)
 
         # Update policy with smoothing
-        new_pi = self.policy_logit()
+        new_pi = self.perturbed_best_response_dynamic()
         self.pi = (1 - self.eta) * self.pi + self.eta * new_pi
 
         # Update value function
@@ -91,16 +92,15 @@ class TravelerGroup(TravelerBase):
     
     def immediate_reward(self, system: 'System'):
         '''
-        TODO: 
+        TODO: optimize and adapt comments
         '''
 
         # Precompute absolute time distance
-        dt = np.abs(np.arange(self.T) - self.t_star)            # shape (T,)
-        early_mask = np.arange(self.T) <= self.t_star           # shape (T,)
+        dt = np.abs(np.arange(self.T) - self.t_star)* self.delta_t       # shape (T,)
+        early_mask = np.arange(self.T) <= self.t_star                    # shape (T,)
 
         # Expand for broadcasting
         dt_exp = dt[None, None, :, None]                   # shape (1,1,T,1)
-        slowQ  = system.slow_lane_queue[None, None, :, None]
         psi    = system.psi[None, None, :, None]
 
         # u values
@@ -110,11 +110,7 @@ class TravelerGroup(TravelerBase):
         beta_t = np.where(early_mask, self.beta, self.gamma)[None,None,:,None]
 
         # Compute the base fast-lane and slow-lane costs
-        fast_lane = -u_val * dt_exp * beta_t               # shape (U,K1,T,K1)
-        slow_lane = -u_val * (dt_exp * beta_t + slowQ * self.alpha)
-
-        # Combine them for the boundary case (b == b*)
-        mixed_lane = fast_lane * psi + slow_lane * (1 - psi)
+        time_reward = -u_val * dt_exp * beta_t               # shape (U,K1,T,K1)
 
         # Create b and b_star arrays for comparison
         b_vals = np.arange(self.K + 1)[None, None, None, :]        # shape (1,1,1,K1)
@@ -124,34 +120,39 @@ class TravelerGroup(TravelerBase):
         b_star = np.broadcast_to(b_star, (self.U, self.K+1, self.T, self.K+1))  # shape (U,K1,T,K1)
 
         # Masks for the three block conditions
-        mask_faster  = b_vals > b_star
+        mask_first_class  = b_vals > b_star
         mask_equal   = b_vals == b_star
-        mask_slower  = b_vals < b_star
 
-        # fast lane / slow lane shapes must match zeta shape (U,K1,T,K1)
-        fast_lane = np.broadcast_to(fast_lane, (self.U, self.K+1, self.T, self.K+1))
-        slow_lane = np.broadcast_to(slow_lane, (self.U, self.K+1, self.T, self.K+1))
-        mixed_lane = np.broadcast_to(mixed_lane, (self.U, self.K+1, self.T, self.K+1))
+        # expend psi with b dimmension
+        psi_exp = np.where(mask_equal, psi, np.where(mask_first_class, 1, 0))  # shape (U,K1,T,K1)
+
+        # expend capacity following the same logic as psi
+        capacity = np.where(mask_equal, system.first_class_capacity * psi + system.second_class_capacity * (1 - psi), np.where(mask_first_class, system.first_class_capacity, system.second_class_capacity))  # shape (U,K1,T,K1)
+
+        # count the number of travelers in each departure time slot
+        number_of_travelers = np.zeros((1,1,self.T,1))
+        for t in range(self.T):
+            number_of_travelers[:,:,t,:] = sum(1 for traveler in system.travelers if traveler.t == t) 
+            # important to use system.travelers and not self.travelers to get the total number of travelers in each departure time slot, not just the ones in the current group
+
+        crowdedness_reward= -self.alpha * psi_exp * np.power(number_of_travelers / capacity, 4)
 
         # Allocate output
         zeta = np.zeros((self.U, self.K+1, self.T, self.K+1))
-
-        # Fill blocks (fast & vectorized)
-        zeta[mask_faster] = fast_lane[mask_faster]     # b > b*(t)
-        zeta[mask_equal]  = mixed_lane[mask_equal]     # b = b*(t)
-        zeta[mask_slower] = slow_lane[mask_slower]     # b < b*(t)
+        zeta += time_reward
+        zeta += crowdedness_reward
 
         self.zeta = zeta.reshape(-1)
 
         return 
 
-    def policy_logit(self):
+    def perturbed_best_response_dynamic(self):
         Q_mtx = self.Q.reshape(self.pi.shape)
         pi = np.zeros(self.pi.shape)
 
         for i, Q_row in enumerate(Q_mtx):
             idx_col = self.action_mask[i] > 0
-            Q_row = Q_row[idx_col]  # KZ: only keep feasible actions
+            Q_row = Q_row[idx_col]  
             expQ = np.exp(Q_row)
             pi[i, idx_col] = expQ / np.sum(expQ)
         return pi
@@ -166,7 +167,6 @@ class Traveler(TravelerBase):
     def __init__(self, 
                  group: TravelerGroup,
                  k_init: int, 
-                 delta_t: int,
                  id: int
                  ):
         '''
@@ -177,10 +177,9 @@ class Traveler(TravelerBase):
         self.group = group
         group.register(self)
 
-        # Fixed attributes
+        # Fixed attributess
         self.id = id
-        self.time_slots = [i * delta_t for i in range(self.group.T)]
-
+        
         # Dynamic attributes
         self.u_curr = 0
         self.k_curr = k_init 
