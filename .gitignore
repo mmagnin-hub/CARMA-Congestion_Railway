@@ -1,8 +1,12 @@
 /.vscode/
 
-/0-Simulation/output_*/
+/0-Simulation/results/
 
 /1-Theory/
 
 /2-Results/
+
+results/
+*.pkl
+__pycache__/
 

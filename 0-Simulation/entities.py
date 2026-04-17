@@ -79,7 +79,7 @@ class TravelerGroup(TravelerBase):
     def update_policy(self, system: 'System'):
         # Computing the expected total reward from state (u,k) taking action (t,b), zeta
         self.immediate_reward(system)
-        self.Q = self.zeta + self.delta * np.dot(self.P, self.V)
+        self.Q = self.zeta + self.delta * np.dot(self.P, self.V) # MM sum product over the last axis of P and V
 
         # Update policy with smoothing
         new_pi = self.perturbed_best_response_dynamic()
@@ -96,7 +96,7 @@ class TravelerGroup(TravelerBase):
         '''
 
         # Precompute absolute time distance
-        dt = np.abs(np.arange(self.T) - self.t_star)* self.delta_t       # shape (T,)
+        dt = np.abs(np.arange(self.T) - self.t_star) * self.delta_t       # shape (T,)
         early_mask = np.arange(self.T) <= self.t_star                    # shape (T,)
 
         # Expand for broadcasting
@@ -152,9 +152,14 @@ class TravelerGroup(TravelerBase):
 
         for i, Q_row in enumerate(Q_mtx):
             idx_col = self.action_mask[i] > 0
-            Q_row = Q_row[idx_col]  
+            Q_row = Q_row[idx_col]
+            Q_row = Q_row - np.max(Q_row) # for numerical stability
             expQ = np.exp(Q_row)
-            pi[i, idx_col] = expQ / np.sum(expQ)
+            denom = np.sum(expQ)
+            if denom == 0 or not np.isfinite(denom):
+                pi[i, idx_col] = 1.0 / np.sum(idx_col) # uniform distribution over valid actions
+            else:
+                pi[i, idx_col] = expQ / denom
         return pi
     
     def __repr__(self):
@@ -209,6 +214,8 @@ class Traveler(TravelerBase):
         (See System.karma_redistribution())
         """
         self.k_curr += karma
+        if self.k_curr > self.group.K:
+            print(f"Warning: Traveler {self.id} with {self.k_curr } karma exceeded max K. Capping to {self.group.K}.")
         return
     
     def update_urgency(self):
@@ -228,7 +235,7 @@ class Traveler(TravelerBase):
 # ==============================================================
 
 class System: 
-    def __init__(self, first_class_capacity: int, second_class_capacity: int, K: int, T: int, travelers: list[Traveler]):
+    def __init__(self, first_class_capacity: int, second_class_capacity: int, K: int, T: int, travelers: list[Traveler], epsilon: float=1e-4):
         '''
         TODO: describe all the variables
         '''
@@ -238,6 +245,7 @@ class System:
         self.K = K  
         self.T = T
         self.N = len(travelers)
+        self.epsilon = epsilon
 
         # Dynamic attributes
         self.b_star = np.zeros(self.T)                
@@ -295,13 +303,13 @@ class System:
             traveler_count_at_b_star = sum(1 for traveler in travelers if traveler.b == b_star)
             traveler_count_over_b_star = sum(1 for traveler in travelers if traveler.b > b_star)
             free_spot_at_b_star = self.first_class_capacity - traveler_count_over_b_star
-            psi = free_spot_at_b_star/traveler_count_at_b_star 
+            psi = free_spot_at_b_star/(traveler_count_at_b_star + self.epsilon * self.N)
         elif len(bids) == 0:
             b_star = 0
-            psi = 1
+            psi = (self.first_class_capacity)/(self.epsilon * self.N)
         else:
             b_star = bids[-1]
-            psi = 1
+            psi = (self.first_class_capacity)/(self.epsilon * self.N)
         return b_star, psi
     
     def assign_lanes(self, t, travelers):

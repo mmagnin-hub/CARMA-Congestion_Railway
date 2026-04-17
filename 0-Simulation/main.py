@@ -1,16 +1,16 @@
 from entities import TravelerGroup, Traveler, System
-from plots import plot_policy_convergence, plot_final_policies, plot_specific_state_policy, plot_specific_state_policy_linear
 import numpy as np
 import pickle
+import os
 
 def main():
     # -------------------------------------------------------------
     # 1. Define model dimensions and parameters
     # -------------------------------------------------------------
     U = 2                 
-    T = 11            
-    delta_t = 1          
-    n_travelers = 600
+    T = 10            
+    delta_t = 15          
+    n_travelers = 9000
     K = 100 
     k_init = 10
     n_groups = 1
@@ -19,11 +19,14 @@ def main():
                     [0.8, 0.2]])
 
     u_value = np.array([1.0, 6.0]) # from the paper
-    delta = 0.9 # discount factor  
+
+    # per hour penalty
+    delta = 0.99 # discount factor  
     eta = 0.1 # smoothing weight
+    epsilon = 1e-4 # approximation parameter for psi 
     alpha = 0.05 # crowdedness penalty weight
-    beta = 1 # early arrival weight
-    gamma = 4 # late arrival weight
+    beta = 4/60 # early arrival weight (per minute)
+    gamma = 16/60 # late arrival weight (per minute)
 
     # -------------------------------------------------------------
     # 2. Create traveler groups
@@ -61,15 +64,16 @@ def main():
     # -------------------------------------------------------------
     # 4. Initialize the System with all travelers
     # -------------------------------------------------------------
-    first_class_capacity = 12 
-    second_class_capacity = 48
+    first_class_capacity = 12 * delta_t # seat per class
+    second_class_capacity = 48 * delta_t # 
 
     system = System(
         first_class_capacity=first_class_capacity,
         second_class_capacity=second_class_capacity,
         K=K,
         T=T,
-        travelers=travelers
+        travelers=travelers,
+        epsilon=epsilon
     )
 
     # -------------------------------------------------------------
@@ -126,23 +130,21 @@ def main():
             if err > threshold:
                 converge = False
             
-        print("b_star of the day :", system.b_star) 
-        print("total b_star of the day :", np.sum(system.b_star)) 
-        print("total slow_lane_queue of the day :", np.sum(system.slow_lane_queue))
-
     # -------------------------------------------------------------
     # 6. Download results
     # -------------------------------------------------------------
-    with open("groups.pkl", "wb") as f:
+    path_name = "results/" # no such folder,
+    os.makedirs(path_name, exist_ok=True)
+    with open(path_name + "groups.pkl", "wb") as f:
         pickle.dump(groups, f)
 
-    with open("error_vec.pkl", "wb") as f:
+    with open(path_name + "error_vec.pkl", "wb") as f:
         pickle.dump(error_vec, f)
 
-    with open("simulation_params.pkl", "wb") as f:
+    with open(path_name + "simulation_params.pkl", "wb") as f:
         pickle.dump((n_day, n_groups, K, n_travelers), f)
 
-    with open("system.pkl", "wb") as f:
+    with open(path_name + "system.pkl", "wb") as f:
         pickle.dump(system, f)
 
 
