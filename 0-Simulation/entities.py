@@ -1,6 +1,81 @@
 import numpy as np
 from abc import ABC, abstractmethod
 import random
+import scipy.sparse as sp
+import numba as nb
+
+@nb.jit(nopython=True)
+def _update_p(p, u_start, k_start, t_arr, b_arr, u_curr, k_curr, U, K, T):
+    p.fill(0.0)
+    for i in range(len(u_start)):
+        idx = u_start[i] * ((K+1) * T * (K+1)) + k_start[i] * (T * (K+1)) + t_arr[i] * (K+1) + b_arr[i]
+        j = u_curr[i] * (K+1) + k_curr[i]
+        p[idx, j] += 1
+    for row in range(p.shape[0]):
+        s = 0.0
+        for col in range(p.shape[1]):
+            s += p[row, col]
+        if s > 0:
+            for col in range(p.shape[1]):
+                p[row, col] /= s
+
+@nb.jit(nopython=True)
+def _compute_zeta(U, K, T, u_value, delta_t, t_star, beta, gamma, alpha, psi, b_star, number_of_travelers, first_class_capacity, second_class_capacity):
+    zeta = np.zeros((U, K+1, T, K+1), dtype=np.float32)
+
+    dt = np.abs(np.arange(T) - t_star) * delta_t
+
+    early_mask = np.arange(T) <= t_star
+
+    beta_t = np.where(early_mask, beta, gamma)
+
+    u_val = u_value[:, None, None, None]
+
+    dt_exp = dt[None, None, :, None]
+
+    psi_exp = psi[None, None, :, None]
+
+    b_star_exp = b_star[None, None, :, None]
+
+    b_vals = np.arange(K + 1)[None, None, None, :]
+
+    b_vals = np.broadcast_to(b_vals, (U, K+1, T, K+1))
+
+    b_star_exp = np.broadcast_to(b_star_exp, (U, K+1, T, K+1))
+
+    mask_first_class = b_vals > b_star_exp
+
+    mask_equal = b_vals == b_star_exp
+
+    psi_exp = np.where(mask_equal, psi_exp, np.where(mask_first_class, 1.0, 0.0))
+
+    capacity = np.where(mask_equal, first_class_capacity * psi_exp + second_class_capacity * (1 - psi_exp), np.where(mask_first_class, first_class_capacity, second_class_capacity))
+
+    number_of_travelers_exp = number_of_travelers[None, None, :, None]
+
+    crowdedness_reward = -alpha * psi_exp * np.power(number_of_travelers_exp / capacity, 4)
+
+    time_reward = -u_val * dt_exp * beta_t[None, None, :, None]
+
+    zeta = time_reward + crowdedness_reward
+
+    return zeta.reshape(-1)
+
+@nb.jit(nopython=True)
+def _perturbed(Q_reshaped, action_mask):
+    pi = np.zeros_like(Q_reshaped, dtype=np.float32)
+
+    for i in range(Q_reshaped.shape[0]):
+        idx_col = np.where(action_mask[i] > 0)[0]
+        Q_row = Q_reshaped[i, idx_col]
+        Q_row = Q_row - np.max(Q_row)
+        expQ = np.exp(Q_row)
+        denom = np.sum(expQ)
+        if denom == 0 or not np.isfinite(denom):
+            pi[i, idx_col] = 1.0 / len(idx_col)
+        else:
+            pi[i, idx_col] = expQ / denom
+    return pi
 
 # ==============================================================
 # Traveler
@@ -40,13 +115,13 @@ class TravelerGroup(TravelerBase):
         # Dynamic attributes
         self.travelers: list[Traveler] = []
         # Shared policy structures (group-level learning)
-        self.zeta = np.zeros((self.U * (self.K+1) * self.T * (self.K+1))) 
-        self.V = np.zeros((self.U * (self.K+1)))
-        self.Q = np.zeros((self.U * (self.K+1) * self.T * (self.K+1)))
-        self.p = np.zeros((self.U * (self.K+1) * self.T * (self.K+1), self.U * (self.K+1)))
-        self.pi = np.random.rand(self.U * (self.K+1), self.T * (self.K+1))
-        self.action_mask = np.zeros_like(self.pi) # action_mask: 1 if action is allowed, 0 otherwise
-        self.state_distribution = np.zeros(self.U * (self.K+1))
+        self.zeta = np.zeros((self.U * (self.K+1) * self.T * (self.K+1)), dtype=np.float32) 
+        self.V = np.zeros((self.U * (self.K+1)), dtype=np.float32)
+        self.Q = np.zeros((self.U * (self.K+1) * self.T * (self.K+1)), dtype=np.float32)
+        self.p = np.zeros((self.U * (self.K+1) * self.T * (self.K+1), self.U * (self.K+1)), dtype=np.float32)
+        self.pi = np.random.rand(self.U * (self.K+1), self.T * (self.K+1)).astype(np.float32)
+        self.action_mask = np.zeros_like(self.pi, dtype=np.float32) # action_mask: 1 if action is allowed, 0 otherwise
+        self.state_distribution = np.zeros(self.U * (self.K+1), dtype=np.float32)
         for i in range(self.U * (self.K+1)): 
             k = i % (self.K+1)
             for t in range(self.T):
@@ -54,6 +129,7 @@ class TravelerGroup(TravelerBase):
                     action_index = t*(self.K+1) + b
                     if b <= k:  
                         self.action_mask[i, action_index] = 1
+        self.valid_action_indices = [np.where(self.action_mask[i] > 0)[0] for i in range(self.U * (self.K+1))]
         self.pi *= self.action_mask
         self.pi = self.pi / self.pi.sum(axis=1, keepdims=True)
 
@@ -64,22 +140,19 @@ class TravelerGroup(TravelerBase):
         '''
         Update the transition matrix P based on simulated transitions.
         '''
-        self.p.fill(0.0)  # KZ: reinit transition
-        for traveler in self.travelers:
-            idx_state_action_init = traveler.u_start * ((self.K+1) * self.T * (self.K+1)) + traveler.k_start * (self.T * (self.K+1)) + traveler.t * (self.K+1) + traveler.b
-            idx_state_final = traveler.u_curr *(self.K+1) + traveler.k_curr
-            self.p[idx_state_action_init,idx_state_final] += 1
-
-        # update transition matrix
-        for row in range(self.p.shape[0]):
-            row_sum = self.p[row, :].sum()
-            if row_sum > 0:
-                self.p[row, :] /= row_sum
+        u_start = np.array([tr.u_start for tr in self.travelers], dtype=np.int32)
+        k_start = np.array([tr.k_start for tr in self.travelers], dtype=np.int32)
+        t_arr = np.array([tr.t for tr in self.travelers], dtype=np.int32)
+        b_arr = np.array([tr.b for tr in self.travelers], dtype=np.int32)
+        u_curr = np.array([tr.u_curr for tr in self.travelers], dtype=np.int32)
+        k_curr = np.array([tr.k_curr for tr in self.travelers], dtype=np.int32)
+        _update_p(self.p, u_start, k_start, t_arr, b_arr, u_curr, k_curr, self.U, self.K, self.T)
         return
     
     def update_policy(self, system: 'System'):
         # Computing the expected total reward from state (u,k) taking action (t,b), zeta
-        self.immediate_reward(system)
+        number_of_travelers = np.array([sum(1 for traveler in system.travelers if traveler.t == t) for t in range(self.T)], dtype=np.float32)
+        self.immediate_reward(system, number_of_travelers)
         self.Q = self.zeta + self.delta * np.dot(self.p, self.V) # MM sum product over the last axis of P and V
 
         # Update policy with smoothing
@@ -91,77 +164,17 @@ class TravelerGroup(TravelerBase):
         self.V = np.sum(Q_reshape * self.pi, axis=1)
         return
     
-    def immediate_reward(self, system: 'System'):
+    def immediate_reward(self, system: 'System', number_of_travelers: np.ndarray):
         '''
         TODO: optimize and adapt comments
         '''
-
-        # Precompute absolute time distance
-        dt = np.abs(np.arange(self.T) - self.t_star) * self.delta_t       # shape (T,)
-        early_mask = np.arange(self.T) <= self.t_star                    # shape (T,)
-
-        # Expand for broadcasting
-        dt_exp = dt[None, None, :, None]                   # shape (1,1,T,1)
-        psi    = system.psi[None, None, :, None]
-
-        # u values
-        u_val = self.u_value[:, None, None, None]          # shape (U,1,1,1)
-
-        # Time-dependent betas/gammas
-        beta_t = np.where(early_mask, self.beta, self.gamma)[None,None,:,None]
-
-        # Compute the base fast-lane and slow-lane costs
-        time_reward = -u_val * dt_exp * beta_t               # shape (U,K1,T,K1)
-
-        # Create b and b_star arrays for comparison
-        b_vals = np.arange(self.K + 1)[None, None, None, :]        # shape (1,1,1,K1)
-        b_vals = np.broadcast_to(b_vals, (self.U, self.K+1, self.T, self.K+1))  # shape (U,K1,T,K1)
-
-        b_star = system.b_star[None, None, :, None]        # shape (1,1,T,1)
-        b_star = np.broadcast_to(b_star, (self.U, self.K+1, self.T, self.K+1))  # shape (U,K1,T,K1)
-
-        # Masks for the three block conditions
-        mask_first_class  = b_vals > b_star
-        mask_equal   = b_vals == b_star
-
-        # expend psi with b dimmension
-        psi_exp = np.where(mask_equal, psi, np.where(mask_first_class, 1, 0))  # shape (U,K1,T,K1)
-
-        # expend capacity following the same logic as psi
-        capacity = np.where(mask_equal, system.first_class_capacity * psi + system.second_class_capacity * (1 - psi), np.where(mask_first_class, system.first_class_capacity, system.second_class_capacity))  # shape (U,K1,T,K1)
-
-        # count the number of travelers in each departure time slot
-        number_of_travelers = np.zeros((1,1,self.T,1))
-        for t in range(self.T):
-            number_of_travelers[:,:,t,:] = sum(1 for traveler in system.travelers if traveler.t == t) 
-            # important to use system.travelers and not self.travelers to get the total number of travelers in each departure time slot, not just the ones in the current group
-
-        crowdedness_reward= -self.alpha * psi_exp * np.power(number_of_travelers / capacity, 4)
-
-        # Allocate output
-        zeta = np.zeros((self.U, self.K+1, self.T, self.K+1))
-        zeta += time_reward
-        zeta += crowdedness_reward
-
-        self.zeta = zeta.reshape(-1)
+        self.zeta = _compute_zeta(self.U, self.K, self.T, self.u_value, self.delta_t, self.t_star, self.beta, self.gamma, self.alpha, system.psi, system.b_star, number_of_travelers, system.first_class_capacity, system.second_class_capacity)
 
         return 
 
     def perturbed_best_response_dynamic(self):
         Q_mtx = self.Q.reshape(self.pi.shape)
-        pi = np.zeros(self.pi.shape)
-
-        for i, Q_row in enumerate(Q_mtx):
-            idx_col = self.action_mask[i] > 0
-            Q_row = Q_row[idx_col]
-            Q_row = Q_row - np.max(Q_row) # for numerical stability
-            expQ = np.exp(Q_row)
-            denom = np.sum(expQ)
-            if denom == 0 or not np.isfinite(denom):
-                pi[i, idx_col] = 1.0 / np.sum(idx_col) # uniform distribution over valid actions
-            else:
-                pi[i, idx_col] = expQ / denom
-        return pi
+        return _perturbed(Q_mtx, self.action_mask)
     
     def update_state_distribution(self):
         self.state_distribution.fill(0.0)

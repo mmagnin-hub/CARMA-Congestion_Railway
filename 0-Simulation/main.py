@@ -10,8 +10,8 @@ def main():
     U = 2                 
     T = 10            
     delta_t = 15          
-    n_travelers = 900 # 9000
-    K = 50 # 100
+    n_travelers = 9000
+    K = 100
     k_init = 10
     n_groups = 1
     t_star = 8
@@ -128,7 +128,7 @@ def main():
             expected_value_vec[n_day, g.traveler_type] = g.expected_value_function
             print(f"Group {g.traveler_type} expected value:", g.expected_value_function)
             err = np.linalg.norm(g.pi - pi_old[:, :, g.traveler_type])
-            # print(f"Group {g.traveler_type} error:", err)
+            print(f"Group {g.traveler_type} error:", err)
             error_vec[n_day, g.traveler_type] = err
             if err > threshold:
                 converge = False
@@ -143,6 +143,9 @@ def main():
 
     with open(path_name + "error_vec.pkl", "wb") as f:
         pickle.dump(error_vec, f)
+
+    with open(path_name + "expected_value_vec.pkl", "wb") as f:
+        pickle.dump(expected_value_vec, f)
 
     with open(path_name + "simulation_params.pkl", "wb") as f:
         pickle.dump((n_day, n_groups, K, n_travelers), f)
