@@ -43,9 +43,10 @@ class TravelerGroup(TravelerBase):
         self.zeta = np.zeros((self.U * (self.K+1) * self.T * (self.K+1))) 
         self.V = np.zeros((self.U * (self.K+1)))
         self.Q = np.zeros((self.U * (self.K+1) * self.T * (self.K+1)))
-        self.P = np.zeros((self.U * (self.K+1) * self.T * (self.K+1), self.U * (self.K+1)))
+        self.p = np.zeros((self.U * (self.K+1) * self.T * (self.K+1), self.U * (self.K+1)))
         self.pi = np.random.rand(self.U * (self.K+1), self.T * (self.K+1))
         self.action_mask = np.zeros_like(self.pi) # action_mask: 1 if action is allowed, 0 otherwise
+        self.state_distribution = np.zeros(self.U * (self.K+1))
         for i in range(self.U * (self.K+1)): 
             k = i % (self.K+1)
             for t in range(self.T):
@@ -63,23 +64,23 @@ class TravelerGroup(TravelerBase):
         '''
         Update the transition matrix P based on simulated transitions.
         '''
-        self.P.fill(0.0)  # KZ: reinit transition
+        self.p.fill(0.0)  # KZ: reinit transition
         for traveler in self.travelers:
-            idx_state_init = traveler.u_start * ((self.K+1) * self.T * (self.K+1)) + traveler.k_start * (self.T * (self.K+1)) + traveler.t * (self.K+1) + traveler.b
+            idx_state_action_init = traveler.u_start * ((self.K+1) * self.T * (self.K+1)) + traveler.k_start * (self.T * (self.K+1)) + traveler.t * (self.K+1) + traveler.b
             idx_state_final = traveler.u_curr *(self.K+1) + traveler.k_curr
-            self.P[idx_state_init,idx_state_final] += 1
+            self.p[idx_state_action_init,idx_state_final] += 1
 
         # update transition matrix
-        for row in range(self.P.shape[0]):
-            row_sum = self.P[row, :].sum()
+        for row in range(self.p.shape[0]):
+            row_sum = self.p[row, :].sum()
             if row_sum > 0:
-                self.P[row, :] /= row_sum
+                self.p[row, :] /= row_sum
         return
     
     def update_policy(self, system: 'System'):
         # Computing the expected total reward from state (u,k) taking action (t,b), zeta
         self.immediate_reward(system)
-        self.Q = self.zeta + self.delta * np.dot(self.P, self.V) # MM sum product over the last axis of P and V
+        self.Q = self.zeta + self.delta * np.dot(self.p, self.V) # MM sum product over the last axis of P and V
 
         # Update policy with smoothing
         new_pi = self.perturbed_best_response_dynamic()
@@ -162,6 +163,18 @@ class TravelerGroup(TravelerBase):
                 pi[i, idx_col] = expQ / denom
         return pi
     
+    def update_state_distribution(self):
+        self.state_distribution.fill(0.0)
+        for traveler in self.travelers:
+            idx_state = traveler.u_curr * (self.K+1) + traveler.k_curr
+            self.state_distribution[idx_state] += 1
+        self.state_distribution = self.state_distribution / len(self.travelers)
+        return
+
+    def compute_expected_value_function(self):
+        self.expected_value_function = np.dot(self.state_distribution, self.V)
+        return
+    
     def __repr__(self):
         return f"TravelerGroup(type={self.traveler_type}, n={len(self.travelers)})"
     
@@ -235,7 +248,7 @@ class Traveler(TravelerBase):
 # ==============================================================
 
 class System: 
-    def __init__(self, first_class_capacity: int, second_class_capacity: int, K: int, T: int, travelers: list[Traveler], epsilon: float=1e-4):
+    def __init__(self, first_class_capacity: int, second_class_capacity: int, K: int, T: int, travelers: list[Traveler]):
         '''
         TODO: describe all the variables
         '''
@@ -245,7 +258,6 @@ class System:
         self.K = K  
         self.T = T
         self.N = len(travelers)
-        self.epsilon = epsilon
 
         # Dynamic attributes
         self.b_star = np.zeros(self.T)                
@@ -303,13 +315,13 @@ class System:
             traveler_count_at_b_star = sum(1 for traveler in travelers if traveler.b == b_star)
             traveler_count_over_b_star = sum(1 for traveler in travelers if traveler.b > b_star)
             free_spot_at_b_star = self.first_class_capacity - traveler_count_over_b_star
-            psi = free_spot_at_b_star/(traveler_count_at_b_star + self.epsilon * self.N)
+            psi = free_spot_at_b_star/(traveler_count_at_b_star)
         elif len(bids) == 0:
             b_star = 0
-            psi = (self.first_class_capacity)/(self.epsilon * self.N)
+            psi = 1
         else:
             b_star = bids[-1]
-            psi = (self.first_class_capacity)/(self.epsilon * self.N)
+            psi = 1
         return b_star, psi
     
     def assign_lanes(self, t, travelers):

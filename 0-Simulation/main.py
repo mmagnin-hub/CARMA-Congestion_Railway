@@ -10,8 +10,8 @@ def main():
     U = 2                 
     T = 10            
     delta_t = 15          
-    n_travelers = 9000
-    K = 100 
+    n_travelers = 900 # 9000
+    K = 50 # 100
     k_init = 10
     n_groups = 1
     t_star = 8
@@ -23,7 +23,6 @@ def main():
     # per hour penalty
     delta = 0.99 # discount factor  
     eta = 0.1 # smoothing weight
-    epsilon = 1e-4 # approximation parameter for psi 
     alpha = 0.05 # crowdedness penalty weight
     beta = 4/60 # early arrival weight (per minute)
     gamma = 16/60 # late arrival weight (per minute)
@@ -72,8 +71,7 @@ def main():
         second_class_capacity=second_class_capacity,
         K=K,
         T=T,
-        travelers=travelers,
-        epsilon=epsilon
+        travelers=travelers
     )
 
     # -------------------------------------------------------------
@@ -85,6 +83,7 @@ def main():
     # For storing old policies: (states × actions × groups)
     pi_old = np.zeros((U*(K+1), T*(K+1), n_groups))
     error_vec = np.zeros((n_day, n_groups))
+    expected_value_vec = np.zeros((n_day, n_groups))
 
     converge = False
 
@@ -120,12 +119,16 @@ def main():
         for g in groups:
             g.update_policy(system)
             g.update_transition_matrix()
+            g.update_state_distribution()
+            g.compute_expected_value_function()
 
 
         # 7. Convergence
         for g in groups:
+            expected_value_vec[n_day, g.traveler_type] = g.expected_value_function
+            print(f"Group {g.traveler_type} expected value:", g.expected_value_function)
             err = np.linalg.norm(g.pi - pi_old[:, :, g.traveler_type])
-            print(f"Group {g.traveler_type} error:", err)
+            # print(f"Group {g.traveler_type} error:", err)
             error_vec[n_day, g.traveler_type] = err
             if err > threshold:
                 converge = False
