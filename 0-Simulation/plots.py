@@ -166,3 +166,137 @@ def plot_specific_state_policy_linear(groups, n_groups, K, specific_u, specific_
 
     plt.tight_layout()
     plt.show()
+
+
+#––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+# NEW PLOTS
+
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+def plot_policy(group, u=None, k=None, t=None, b=None):
+    """
+    Plot policy heatmap with flexible slicing.
+
+    Parameters
+    ----------
+    group : TravelerGroup
+    u, k : int or list or None
+    t, b : int or list or None
+    """
+
+    U, K, T = group.U, group.K, group.T
+
+    # ---- helper to normalize inputs ----
+    def to_list(x, max_val):
+        if x is None:
+            return list(range(max_val))
+        if isinstance(x, int):
+            return [x]
+        return list(x)
+
+    u_list = to_list(u, U)
+    k_list = to_list(k, K+1)
+    t_list = to_list(t, T)
+    b_list = to_list(b, K+1)
+
+    # ---- build indices ----
+    state_indices = [ui*(K+1)+ki for ui in u_list for ki in k_list]
+    action_indices = [ti*(K+1)+bi for ti in t_list for bi in b_list]
+
+    # ---- slice matrix ----
+    pi = group.pi[np.ix_(state_indices, action_indices)]
+
+    # ---- labels ----
+    # Only show labels at transitions (when value changes)
+    state_labels = []
+    prev_ui = None
+    for ui in u_list:
+        for ki in k_list:
+            if ui != prev_ui:
+                state_labels.append(f"u={ui}")
+            else:
+                state_labels.append("")
+            prev_ui = ui
+    
+    action_labels = []
+    prev_ti = None
+    for ti in t_list:
+        for bi in b_list:
+            if ti != prev_ti:
+                action_labels.append(f"t={ti}")
+            else:
+                action_labels.append("")
+            prev_ti = ti
+
+    # ---- plot ----
+    plt.figure(figsize=(10, 6))
+    sns.heatmap(pi, cmap="viridis", xticklabels=action_labels, yticklabels=state_labels)
+    plt.title("Policy Heatmap π(u,k → t,b)")
+    plt.xlabel("Actions (t,b)")
+    plt.ylabel("States (u,k)")
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_transition_matrix(group, u=None, k=None, t=None, b=None, max_plots=6):
+    """
+    Plot transition matrices for selected (u,k,t,b).
+
+    If too many combinations are requested, raises an error.
+    """
+
+    U, K, T = group.U, group.K, group.T
+
+    def to_list(x, max_val):
+        if x is None:
+            return list(range(max_val))
+        if isinstance(x, int):
+            return [x]
+        return list(x)
+
+    u_list = to_list(u, U)
+    k_list = to_list(k, K+1)
+    t_list = to_list(t, T)
+    b_list = to_list(b, K+1)
+
+    combos = [(ui, ki, ti, bi)
+              for ui in u_list
+              for ki in k_list
+              for ti in t_list
+              for bi in b_list]
+
+    if len(combos) > max_plots:
+        raise ValueError(
+            f"Too many (u,k,t,b) combinations ({len(combos)}). "
+            f"Reduce selection (max {max_plots})."
+        )
+
+    # ---- plotting ----
+    fig, axes = plt.subplots(1, len(combos), figsize=(5*len(combos), 4))
+
+    if len(combos) == 1:
+        axes = [axes]
+
+    for ax, (ui, ki, ti, bi) in zip(axes, combos):
+
+        idx = (
+            ui * ((K+1)*T*(K+1)) +
+            ki * (T*(K+1)) +
+            ti * (K+1) +
+            bi
+        )
+
+        row = group.p[idx]  # shape (U*(K+1),)
+
+        matrix = row.reshape(U, K+1)
+
+        sns.heatmap(matrix, cmap="magma", ax=ax, vmin=0, vmax=1)
+
+        ax.set_title(f"(u={ui},k={ki},t={ti},b={bi})")
+        ax.set_xlabel("k'")
+        ax.set_ylabel("u'")
+
+    plt.tight_layout()
+    plt.show()

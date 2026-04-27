@@ -5,10 +5,10 @@ import scipy.sparse as sp
 import numba as nb
 
 @nb.jit(nopython=True)
-def _update_p(p, u_start, k_start, t_arr, b_arr, u_curr, k_curr, U, K, T):
+def _update_p(p, u_start, k_start, t_start, b_start, u_curr, k_curr, U, K, T):
     p.fill(0.0)
     for i in range(len(u_start)):
-        idx = u_start[i] * ((K+1) * T * (K+1)) + k_start[i] * (T * (K+1)) + t_arr[i] * (K+1) + b_arr[i]
+        idx = u_start[i] * ((K+1) * T * (K+1)) + k_start[i] * (T * (K+1)) + t_start[i] * (K+1) + b_start[i]
         j = u_curr[i] * (K+1) + k_curr[i]
         p[idx, j] += 1
     for row in range(p.shape[0]):
@@ -53,11 +53,11 @@ def _compute_zeta(U, K, T, u_value, delta_t, t_star, beta, gamma, alpha, psi, b_
 
     number_of_travelers_exp = number_of_travelers[None, None, :, None]
 
-    crowdedness_reward = -alpha * psi_exp * np.power(number_of_travelers_exp / capacity, 4)
+    crowdedness_reward = alpha * psi_exp * np.power(number_of_travelers_exp / capacity, 4)
 
-    time_reward = -u_val * dt_exp * beta_t[None, None, :, None]
+    time_reward = u_val * dt_exp * beta_t[None, None, :, None]
 
-    zeta = time_reward + crowdedness_reward
+    zeta = - time_reward - crowdedness_reward
 
     return zeta.reshape(-1)
 
@@ -135,33 +135,45 @@ class TravelerGroup(TravelerBase):
 
     def register(self, traveler: 'Traveler'):
         self.travelers.append(traveler)
-
+    
+    def update_group_attributes(self, system: 'System'):
+        self.update_immediate_reward(system)
+        self.update_Q()
+        self.update_policy()
+        self.update_V()
+        self.update_transition_matrix()
+        return
+    
+    def update_immediate_reward(self, system: 'System'):
+        number_of_travelers = np.array([sum(1 for traveler in system.travelers if traveler.t == t) for t in range(self.T)], dtype=np.float32)
+        self.immediate_reward(system, number_of_travelers)
+        return
+    
+    def update_Q(self):
+        self.Q = self.zeta + self.delta * np.dot(self.p, self.V) # MM sum product over the last axis of P and V
+        return
+    
+    def update_policy(self):
+        new_pi = self.perturbed_best_response_dynamic()
+        self.pi = (1 - self.eta) * self.pi + self.eta * new_pi
+        return
+    
+    def update_V(self):
+        Q_reshape = self.Q.reshape(self.pi.shape) 
+        self.V = np.sum(Q_reshape * self.pi, axis=1)
+        return
+    
     def update_transition_matrix(self):
         '''
         Update the transition matrix P based on simulated transitions.
         '''
         u_start = np.array([tr.u_start for tr in self.travelers], dtype=np.int32)
         k_start = np.array([tr.k_start for tr in self.travelers], dtype=np.int32)
-        t_arr = np.array([tr.t for tr in self.travelers], dtype=np.int32)
-        b_arr = np.array([tr.b for tr in self.travelers], dtype=np.int32)
+        t_start = np.array([tr.t for tr in self.travelers], dtype=np.int32)
+        b_start = np.array([tr.b for tr in self.travelers], dtype=np.int32)
         u_curr = np.array([tr.u_curr for tr in self.travelers], dtype=np.int32)
         k_curr = np.array([tr.k_curr for tr in self.travelers], dtype=np.int32)
-        _update_p(self.p, u_start, k_start, t_arr, b_arr, u_curr, k_curr, self.U, self.K, self.T)
-        return
-    
-    def update_policy(self, system: 'System'):
-        # Computing the expected total reward from state (u,k) taking action (t,b), zeta
-        number_of_travelers = np.array([sum(1 for traveler in system.travelers if traveler.t == t) for t in range(self.T)], dtype=np.float32)
-        self.immediate_reward(system, number_of_travelers)
-        self.Q = self.zeta + self.delta * np.dot(self.p, self.V) # MM sum product over the last axis of P and V
-
-        # Update policy with smoothing
-        new_pi = self.perturbed_best_response_dynamic()
-        self.pi = (1 - self.eta) * self.pi + self.eta * new_pi
-
-        # Update value function
-        Q_reshape = self.Q.reshape(self.pi.shape) 
-        self.V = np.sum(Q_reshape * self.pi, axis=1)
+        _update_p(self.p, u_start, k_start, t_start, b_start, u_curr, k_curr, self.U, self.K, self.T)
         return
     
     def immediate_reward(self, system: 'System', number_of_travelers: np.ndarray):
@@ -169,7 +181,6 @@ class TravelerGroup(TravelerBase):
         TODO: optimize and adapt comments
         '''
         self.zeta = _compute_zeta(self.U, self.K, self.T, self.u_value, self.delta_t, self.t_star, self.beta, self.gamma, self.alpha, system.psi, system.b_star, number_of_travelers, system.first_class_capacity, system.second_class_capacity)
-
         return 
 
     def perturbed_best_response_dynamic(self):

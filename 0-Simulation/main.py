@@ -22,7 +22,7 @@ def main():
 
     # per hour penalty
     delta = 0.99 # discount factor  
-    eta = 0.1 # smoothing weight
+    eta = 0.1 #0.1 # smoothing weight
     alpha = 0.05 # crowdedness penalty weight
     beta = 4/60 # early arrival weight (per minute)
     gamma = 16/60 # late arrival weight (per minute)
@@ -77,7 +77,7 @@ def main():
     # -------------------------------------------------------------
     # 5. Simulation loop
     # -------------------------------------------------------------
-    threshold = 1e-3
+    threshold = 1e-4
     n_day = 100
 
     # For storing old policies: (states × actions × groups)
@@ -117,8 +117,8 @@ def main():
 
         # 6. Update each group (independent policies)
         for g in groups:
-            g.update_policy(system)
-            g.update_transition_matrix()
+            g.update_group_attributes(system) 
+
             g.update_state_distribution()
             g.compute_expected_value_function()
 
