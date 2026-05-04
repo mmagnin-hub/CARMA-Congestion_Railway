@@ -22,7 +22,7 @@ def main():
 
     # per hour penalty
     delta = 0.99 # discount factor  
-    eta = 0.1 #0.1 # smoothing weight
+    eta = 0.1 # smoothing weight MM will be remove 
     alpha = 0.05 # crowdedness penalty weight
     beta = 4/60 # early arrival weight (per minute)
     gamma = 16/60 # late arrival weight (per minute)
@@ -78,7 +78,8 @@ def main():
     # 5. Simulation loop
     # -------------------------------------------------------------
     threshold = 1e-4
-    n_day = 100
+    total_day = 100
+    n_day = total_day
 
     # For storing old policies: (states × actions × groups)
     pi_old = np.zeros((U*(K+1), T*(K+1), n_groups))
@@ -104,9 +105,14 @@ def main():
         # 2. System queues
         system.simulate_class_attribution()
 
+        total_karma = 0
         # 3. Payment
         for tr in travelers:
+            total_karma += tr.k_curr # after redistribution
             tr.paid_karma_bid()
+            
+
+        assert not (np.isclose(total_karma, n_travelers * k_init) == False), f"Total karma {total_karma} does not match initial total karma {n_travelers * k_init}"
 
         # 4. Redistribution
         system.karma_redistribution()
@@ -117,13 +123,21 @@ def main():
 
         # 6. Update each group (independent policies)
         for g in groups:
-            g.update_group_attributes(system) 
+            g.update_group_attributes(system, (total_day-n_day)) 
 
             g.update_state_distribution()
             g.compute_expected_value_function()
 
+            # check that the transition matrix is valid and get the state location
+            row_sums = g.p.sum(axis=1)
+
+
+            assert not ((~np.isclose(row_sums, 1)) & (~np.isclose(row_sums, 0))).any(), \
+                f"Transition matrix rows do not sum to 0 for unfeasible state-action pairs or 1 but to {row_sums}"
+
 
         # 7. Convergence
+        print("b_star", system.b_star)
         for g in groups:
             expected_value_vec[n_day, g.traveler_type] = g.expected_value_function
             print(f"Group {g.traveler_type} expected value:", g.expected_value_function)
@@ -136,7 +150,7 @@ def main():
     # -------------------------------------------------------------
     # 6. Download results
     # -------------------------------------------------------------
-    path_name = "results/" # no such folder,
+    path_name = "results_0/" 
     os.makedirs(path_name, exist_ok=True)
     with open(path_name + "groups.pkl", "wb") as f:
         pickle.dump(groups, f)

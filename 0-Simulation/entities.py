@@ -5,7 +5,7 @@ import scipy.sparse as sp
 import numba as nb
 
 @nb.jit(nopython=True)
-def _update_p(p, u_start, k_start, t_start, b_start, u_curr, k_curr, U, K, T):
+def _update_p(p, u_start, k_start, t_start, b_start, u_curr, k_curr, U, K, T, state_action_mask):
     p.fill(0.0)
     for i in range(len(u_start)):
         idx = u_start[i] * ((K+1) * T * (K+1)) + k_start[i] * (T * (K+1)) + t_start[i] * (K+1) + b_start[i]
@@ -18,6 +18,11 @@ def _update_p(p, u_start, k_start, t_start, b_start, u_curr, k_curr, U, K, T):
         if s > 0:
             for col in range(p.shape[1]):
                 p[row, col] /= s
+                
+        # elif s == 0: # MM uniformly distribute if no transitions observed
+        #     for col in range(p.shape[1]):
+        #         p[row, col] = 1/(p.shape[1])
+    p[state_action_mask == 0, :] = 0.0 
 
 @nb.jit(nopython=True)
 def _compute_zeta(U, K, T, u_value, delta_t, t_star, beta, gamma, alpha, psi, b_star, number_of_travelers, first_class_capacity, second_class_capacity):
@@ -53,11 +58,11 @@ def _compute_zeta(U, K, T, u_value, delta_t, t_star, beta, gamma, alpha, psi, b_
 
     number_of_travelers_exp = number_of_travelers[None, None, :, None]
 
-    crowdedness_reward = alpha * psi_exp * np.power(number_of_travelers_exp / capacity, 4)
+    crowdedness_penalty = alpha * psi_exp * np.power(number_of_travelers_exp / capacity, 4)
 
-    time_reward = u_val * dt_exp * beta_t[None, None, :, None]
+    time_penalty = u_val * dt_exp * beta_t[None, None, :, None]
 
-    zeta = - time_reward - crowdedness_reward
+    zeta = - time_penalty - crowdedness_penalty
 
     return zeta.reshape(-1)
 
@@ -68,7 +73,6 @@ def _perturbed(Q_reshaped, action_mask):
     for i in range(Q_reshaped.shape[0]):
         idx_col = np.where(action_mask[i] > 0)[0]
         Q_row = Q_reshaped[i, idx_col]
-        Q_row = Q_row - np.max(Q_row)
         expQ = np.exp(Q_row)
         denom = np.sum(expQ)
         if denom == 0 or not np.isfinite(denom):
@@ -118,9 +122,10 @@ class TravelerGroup(TravelerBase):
         self.zeta = np.zeros((self.U * (self.K+1) * self.T * (self.K+1)), dtype=np.float32) 
         self.V = np.zeros((self.U * (self.K+1)), dtype=np.float32)
         self.Q = np.zeros((self.U * (self.K+1) * self.T * (self.K+1)), dtype=np.float32)
-        self.p = np.zeros((self.U * (self.K+1) * self.T * (self.K+1), self.U * (self.K+1)), dtype=np.float32)
+        self.p = np.zeros((self.U * (self.K+1) * self.T * (self.K+1), self.U * (self.K+1)),dtype=np.float32) 
         self.pi = np.random.rand(self.U * (self.K+1), self.T * (self.K+1)).astype(np.float32)
         self.action_mask = np.zeros_like(self.pi, dtype=np.float32) # action_mask: 1 if action is allowed, 0 otherwise
+        self.state_action_mask = np.zeros((self.U * (self.K+1) * self.T * (self.K+1)), dtype=np.float32) # state_action_mask: 1 if state-action pair is allowed, 0 otherwise
         self.state_distribution = np.zeros(self.U * (self.K+1), dtype=np.float32)
         for i in range(self.U * (self.K+1)): 
             k = i % (self.K+1)
@@ -129,40 +134,21 @@ class TravelerGroup(TravelerBase):
                     action_index = t*(self.K+1) + b
                     if b <= k:  
                         self.action_mask[i, action_index] = 1
-        self.valid_action_indices = [np.where(self.action_mask[i] > 0)[0] for i in range(self.U * (self.K+1))]
+                        self.state_action_mask[i * (self.T * (self.K+1)) + action_index] = 1
         self.pi *= self.action_mask
         self.pi = self.pi / self.pi.sum(axis=1, keepdims=True)
 
     def register(self, traveler: 'Traveler'):
         self.travelers.append(traveler)
     
-    def update_group_attributes(self, system: 'System'):
+    def update_group_attributes(self, system: 'System', n_day: int):
+        self.update_transition_matrix()
         self.update_immediate_reward(system)
         self.update_Q()
-        self.update_policy()
+        self.update_policy(n_day)
         self.update_V()
-        self.update_transition_matrix()
         return
-    
-    def update_immediate_reward(self, system: 'System'):
-        number_of_travelers = np.array([sum(1 for traveler in system.travelers if traveler.t == t) for t in range(self.T)], dtype=np.float32)
-        self.immediate_reward(system, number_of_travelers)
-        return
-    
-    def update_Q(self):
-        self.Q = self.zeta + self.delta * np.dot(self.p, self.V) # MM sum product over the last axis of P and V
-        return
-    
-    def update_policy(self):
-        new_pi = self.perturbed_best_response_dynamic()
-        self.pi = (1 - self.eta) * self.pi + self.eta * new_pi
-        return
-    
-    def update_V(self):
-        Q_reshape = self.Q.reshape(self.pi.shape) 
-        self.V = np.sum(Q_reshape * self.pi, axis=1)
-        return
-    
+
     def update_transition_matrix(self):
         '''
         Update the transition matrix P based on simulated transitions.
@@ -173,10 +159,29 @@ class TravelerGroup(TravelerBase):
         b_start = np.array([tr.b for tr in self.travelers], dtype=np.int32)
         u_curr = np.array([tr.u_curr for tr in self.travelers], dtype=np.int32)
         k_curr = np.array([tr.k_curr for tr in self.travelers], dtype=np.int32)
-        _update_p(self.p, u_start, k_start, t_start, b_start, u_curr, k_curr, self.U, self.K, self.T)
+        _update_p(self.p, u_start, k_start, t_start, b_start, u_curr, k_curr, self.U, self.K, self.T, self.state_action_mask)
         return
     
-    def immediate_reward(self, system: 'System', number_of_travelers: np.ndarray):
+    def update_immediate_reward(self, system: 'System'):
+        number_of_travelers = np.array([sum(1 for traveler in system.travelers if traveler.t == t) for t in range(self.T)], dtype=np.float32)
+        self.compute_immediate_reward(system, number_of_travelers)
+        return
+    
+    def update_Q(self):
+        self.Q = self.zeta + self.delta * np.dot(self.p, self.V) # MM sum product over the last axis of P and V
+        return
+    
+    def update_policy(self, n_day: int):
+        pi_tilde = self.perturbed_best_response_dynamic()
+        self.pi = self.pi + 1/(n_day + 1) * (pi_tilde - self.pi)
+        return
+    
+    def update_V(self):
+        Q_reshape = self.Q.reshape(self.pi.shape) 
+        self.V = np.sum(Q_reshape * self.pi, axis=1)
+        return
+    
+    def compute_immediate_reward(self, system: 'System', number_of_travelers: np.ndarray):
         '''
         TODO: optimize and adapt comments
         '''

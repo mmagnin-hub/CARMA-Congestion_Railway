@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 import numpy as np
- 
+import math
 
 
 def plot_policy_convergence(error_vec, n_day, n_groups):
@@ -171,24 +171,26 @@ def plot_specific_state_policy_linear(groups, n_groups, K, specific_u, specific_
 #––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
 # NEW PLOTS
 
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
+import numpy as np 
+import matplotlib.pyplot as plt 
+import seaborn as sns 
+import math 
+from matplotlib.colors import LogNorm
 
-def plot_policy(group, u=None, k=None, t=None, b=None):
+def plot_policy(group, u=None, k=None, t=None, b=None, b_star=None):
     """
-    Plot policy heatmap with flexible slicing.
+    Plot policy heatmap with flexible slicing + optimal b* markers.
 
     Parameters
     ----------
     group : TravelerGroup
     u, k : int or list or None
     t, b : int or list or None
+    b_star : list or array of size T (optimal b for each t)
     """
 
     U, K, T = group.U, group.K, group.T
 
-    # ---- helper to normalize inputs ----
     def to_list(x, max_val):
         if x is None:
             return list(range(max_val))
@@ -201,51 +203,53 @@ def plot_policy(group, u=None, k=None, t=None, b=None):
     t_list = to_list(t, T)
     b_list = to_list(b, K+1)
 
-    # ---- build indices ----
     state_indices = [ui*(K+1)+ki for ui in u_list for ki in k_list]
     action_indices = [ti*(K+1)+bi for ti in t_list for bi in b_list]
 
-    # ---- slice matrix ----
     pi = group.pi[np.ix_(state_indices, action_indices)]
 
     # ---- labels ----
-    # Only show labels at transitions (when value changes)
     state_labels = []
     prev_ui = None
     for ui in u_list:
         for ki in k_list:
-            if ui != prev_ui:
-                state_labels.append(f"u={ui}")
-            else:
-                state_labels.append("")
+            state_labels.append(f"u={ui}" if ui != prev_ui else "")
             prev_ui = ui
-    
+
     action_labels = []
     prev_ti = None
     for ti in t_list:
         for bi in b_list:
-            if ti != prev_ti:
-                action_labels.append(f"t={ti}")
-            else:
-                action_labels.append("")
+            action_labels.append(f"t={ti}" if ti != prev_ti else "")
             prev_ti = ti
 
     # ---- plot ----
     plt.figure(figsize=(10, 6))
-    sns.heatmap(pi, cmap="viridis", xticklabels=action_labels, yticklabels=state_labels)
+    ax = sns.heatmap(pi, cmap="viridis",
+                     xticklabels=action_labels,
+                     yticklabels=state_labels)
+
+    # ---- add vertical lines for b_star ----
+    if b_star is not None:
+        for i, ti in enumerate(t_list):
+            if ti >= len(b_star):
+                continue
+            b_opt = b_star[ti]
+
+            if b_opt in b_list:
+                # position inside the block
+                bi_index = b_list.index(b_opt)
+                x_pos = i * len(b_list) + bi_index + 0.5
+                ax.axvline(x=x_pos, color="red", linewidth=2)
+
     plt.title("Policy Heatmap π(u,k → t,b)")
     plt.xlabel("Actions (t,b)")
     plt.ylabel("States (u,k)")
     plt.tight_layout()
     plt.show()
 
-
-def plot_transition_matrix(group, u=None, k=None, t=None, b=None, max_plots=6):
-    """
-    Plot transition matrices for selected (u,k,t,b).
-
-    If too many combinations are requested, raises an error.
-    """
+def plot_transition_matrix(group, u=None, k=None, t=None, b=None,
+                           b_star=None, max_plots=6):
 
     U, K, T = group.U, group.K, group.T
 
@@ -269,15 +273,15 @@ def plot_transition_matrix(group, u=None, k=None, t=None, b=None, max_plots=6):
 
     if len(combos) > max_plots:
         raise ValueError(
-            f"Too many (u,k,t,b) combinations ({len(combos)}). "
-            f"Reduce selection (max {max_plots})."
+            f"Too many combinations ({len(combos)}), max is {max_plots}"
         )
 
-    # ---- plotting ----
-    fig, axes = plt.subplots(1, len(combos), figsize=(5*len(combos), 4))
+    n = len(combos)
+    ncols = min(n, 3)
+    nrows = math.ceil(n / ncols)
 
-    if len(combos) == 1:
-        axes = [axes]
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5*ncols, 5*nrows))
+    axes = np.array(axes).ravel()
 
     for ax, (ui, ki, ti, bi) in zip(axes, combos):
 
@@ -288,13 +292,36 @@ def plot_transition_matrix(group, u=None, k=None, t=None, b=None, max_plots=6):
             bi
         )
 
-        row = group.p[idx]  # shape (U*(K+1),)
-
+        row = group.p[idx]
         matrix = row.reshape(U, K+1)
 
-        sns.heatmap(matrix, cmap="magma", ax=ax, vmin=0, vmax=1)
+        # ---- crop k' axis ----
+        k_min = max(0, ki - 5)
+        k_max = min(K, ki + 5)
 
-        ax.set_title(f"(u={ui},k={ki},t={ti},b={bi})")
+        outside_left = matrix[:, :k_min]
+        outside_right = matrix[:, k_max+1:]
+
+        if (np.any(outside_left > 1e-12) or np.any(outside_right > 1e-12)):
+            raise ValueError(
+                f"Non-zero transition probability outside k±5 window "
+                f"for (u={ui},k={ki},t={ti},b={bi})"
+            )
+
+        matrix_cropped = matrix[:, k_min:k_max+1]
+
+        # ---- plot ----
+        sns.heatmap(matrix_cropped,
+                    cmap="rocket",   # brighter than magma
+                    ax=ax,
+                    vmin=0, vmax=1)
+
+        # ---- title with b_star ----
+        if b_star is not None and ti < len(b_star):
+            ax.set_title(f"(u={ui},k={ki},t={ti},b={bi}) | b*={b_star[ti]}")
+        else:
+            ax.set_title(f"(u={ui},k={ki},t={ti},b={bi})")
+
         ax.set_xlabel("k'")
         ax.set_ylabel("u'")
 
