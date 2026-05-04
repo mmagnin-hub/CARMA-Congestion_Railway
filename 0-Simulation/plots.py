@@ -228,6 +228,58 @@ def plot_policy(group, u=None, k=None, t=None, b=None, b_star=None):
     ax = sns.heatmap(pi, cmap="viridis",
                      xticklabels=action_labels,
                      yticklabels=state_labels)
+    
+    # ---- Y axis (u,k) ----
+    yticks = list(range(len(state_indices)))
+    y_major_positions = []
+    y_minor_labels = []
+
+    for i, ui in enumerate(u_list):
+        for j, ki in enumerate(k_list):
+            pos = i * len(k_list) + j
+            y_minor_labels.append(str(ki))  # k labels (numbers only)
+            if j == 0:
+                y_major_positions.append(pos)
+
+    # major = u
+    ax.set_yticks(y_major_positions)
+    ax.set_yticklabels([f"u={ui}" for ui in u_list], rotation=0)
+
+    # minor = k
+    ax.set_yticks(yticks, minor=True)
+    ax.set_yticklabels(y_minor_labels, minor=True)
+
+
+    # ---- X axis (t,b) ----
+    xticks = list(range(len(action_indices)))
+    x_major_positions = []
+    x_minor_labels = []
+
+    for i, ti in enumerate(t_list):
+        for j, bi in enumerate(b_list):
+            pos = i * len(b_list) + j
+            x_minor_labels.append(str(bi))  # b labels (numbers only)
+            if j == 0:
+                x_major_positions.append(pos)
+
+    # major = t
+    ax.set_xticks(x_major_positions)
+    ax.set_xticklabels([f"t={ti}" for ti in t_list], rotation=0)
+
+    # minor = b
+    ax.set_xticks(xticks, minor=True)
+    ax.set_xticklabels(x_minor_labels, minor=True)
+
+    # spacing between major and minor labels
+    ax.tick_params(axis='x', which='major', pad=10)
+    ax.tick_params(axis='x', which='minor', pad=2)
+
+    ax.tick_params(axis='y', which='major', pad=10)
+    ax.tick_params(axis='y', which='minor', pad=2)
+
+    # size difference
+    ax.tick_params(axis='both', which='major', length=8, width=2, labelsize=10)
+    ax.tick_params(axis='both', which='minor', length=3, width=0.8, labelsize=8)
 
     # ---- add vertical lines for b_star ----
     if b_star is not None:
@@ -311,10 +363,17 @@ def plot_transition_matrix(group, u=None, k=None, t=None, b=None,
         matrix_cropped = matrix[:, k_min:k_max+1]
 
         # ---- plot ----
-        sns.heatmap(matrix_cropped,
-                    cmap="rocket",   # brighter than magma
-                    ax=ax,
-                    vmin=0, vmax=1)
+        xticks = list(range(k_min, k_max + 1))
+        step = max(1, len(xticks)//6)
+
+        sns.heatmap(
+            matrix_cropped,
+            cmap="rocket",
+            ax=ax,
+            vmin=0, vmax=1,
+            xticklabels=xticks[::step],
+            yticklabels=list(range(U))
+        )
 
         # ---- title with b_star ----
         if b_star is not None and ti < len(b_star):
@@ -322,8 +381,8 @@ def plot_transition_matrix(group, u=None, k=None, t=None, b=None,
         else:
             ax.set_title(f"(u={ui},k={ki},t={ti},b={bi})")
 
-        ax.set_xlabel("k'")
-        ax.set_ylabel("u'")
+        #ax.set_xlabel("k'")
+        # ax.set_ylabel("u'")
 
     plt.tight_layout()
     plt.show()

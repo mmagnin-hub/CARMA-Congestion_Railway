@@ -159,6 +159,13 @@ class TravelerGroup(TravelerBase):
         b_start = np.array([tr.b for tr in self.travelers], dtype=np.int32)
         u_curr = np.array([tr.u_curr for tr in self.travelers], dtype=np.int32)
         k_curr = np.array([tr.k_curr for tr in self.travelers], dtype=np.int32)
+        # debug
+        for i in range(len(u_start)):
+            if self.travelers[i].enter_first_class and k_start[i] - b_start[i] > k_curr[i]:
+                print("Warning: observed transition where k_start - b_start > k_curr for traveler entering first class. This should not happen if travelers are correctly paying their karma bids.")
+            elif not self.travelers[i].enter_first_class and k_start[i] > k_curr[i]:
+                print("Warning: observed transition where k_start > k_curr for traveler not entering first class. This should not happen if travelers are correctly paying their karma bids.")
+
         _update_p(self.p, u_start, k_start, t_start, b_start, u_curr, k_curr, self.U, self.K, self.T, self.state_action_mask)
         return
     

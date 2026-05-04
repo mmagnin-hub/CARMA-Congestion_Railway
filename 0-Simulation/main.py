@@ -7,12 +7,12 @@ def main():
     # -------------------------------------------------------------
     # 1. Define model dimensions and parameters
     # -------------------------------------------------------------
-    U = 2                 
-    T = 10            
+    U = 2 # u in {0, 1} (urgency levels)             
+    T = 10 # t in {0, 1, ..., 9} (time slots)         
     delta_t = 15          
     n_travelers = 9000
-    K = 100
-    k_init = 10
+    K = 100 # k in {0, 1, ..., 100} (karma levels)
+    k_init = 5 # 10 
     n_groups = 1
     t_star = 8
     phi = np.array([[0.8, 0.2],
@@ -78,7 +78,7 @@ def main():
     # 5. Simulation loop
     # -------------------------------------------------------------
     threshold = 1e-4
-    total_day = 100
+    total_day = 200
     n_day = total_day
 
     # For storing old policies: (states × actions × groups)
@@ -108,7 +108,7 @@ def main():
         total_karma = 0
         # 3. Payment
         for tr in travelers:
-            total_karma += tr.k_curr # after redistribution
+            total_karma += tr.k_curr # "after" redistribution
             tr.paid_karma_bid()
             
 
@@ -131,7 +131,6 @@ def main():
             # check that the transition matrix is valid and get the state location
             row_sums = g.p.sum(axis=1)
 
-
             assert not ((~np.isclose(row_sums, 1)) & (~np.isclose(row_sums, 0))).any(), \
                 f"Transition matrix rows do not sum to 0 for unfeasible state-action pairs or 1 but to {row_sums}"
 
@@ -150,7 +149,7 @@ def main():
     # -------------------------------------------------------------
     # 6. Download results
     # -------------------------------------------------------------
-    path_name = "results_0/" 
+    path_name = "results_1/" 
     os.makedirs(path_name, exist_ok=True)
     with open(path_name + "groups.pkl", "wb") as f:
         pickle.dump(groups, f)
