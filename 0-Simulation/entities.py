@@ -346,11 +346,12 @@ class System:
         Compute threshold bid (b_star) for the first class.
         """
         bids = sorted([traveler.b for traveler in travelers], reverse=True)
-        if len(bids) > self.first_class_capacity:
-            b_star = bids[self.first_class_capacity - 1]
+        first_class_limit = int(self.first_class_capacity * 0.8) # MM: comfort margin
+        if len(bids) > first_class_limit: 
+            b_star = bids[first_class_limit - 1]
             traveler_count_at_b_star = sum(1 for traveler in travelers if traveler.b == b_star)
             traveler_count_over_b_star = sum(1 for traveler in travelers if traveler.b > b_star)
-            free_spot_at_b_star = self.first_class_capacity - traveler_count_over_b_star
+            free_spot_at_b_star = first_class_limit - traveler_count_over_b_star
             psi = free_spot_at_b_star/(traveler_count_at_b_star)
         elif len(bids) == 0:
             b_star = 0

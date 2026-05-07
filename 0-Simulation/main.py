@@ -12,7 +12,7 @@ def main():
     delta_t = 15          
     n_travelers = 9000
     K = 100 # k in {0, 1, ..., 100} (karma levels)
-    k_init = 5 # 10 
+    k_init = 10 # 10 
     n_groups = 1
     t_star = 8
     phi = np.array([[0.8, 0.2],
@@ -63,8 +63,8 @@ def main():
     # -------------------------------------------------------------
     # 4. Initialize the System with all travelers
     # -------------------------------------------------------------
-    first_class_capacity = 12 * delta_t # seat per class
-    second_class_capacity = 48 * delta_t # 
+    first_class_capacity = 0.8 * 90 # 12 * delta_t # seat per class per departure time 
+    second_class_capacity = 810 # 48 * delta_t 
 
     system = System(
         first_class_capacity=first_class_capacity,
@@ -78,7 +78,7 @@ def main():
     # 5. Simulation loop
     # -------------------------------------------------------------
     threshold = 1e-4
-    total_day = 200
+    total_day = 100
     n_day = total_day
 
     # For storing old policies: (states × actions × groups)
@@ -165,6 +165,8 @@ def main():
 
     with open(path_name + "system.pkl", "wb") as f:
         pickle.dump(system, f)
+
+    print("Simulation completed and results saved in folder", path_name)
 
 
 if __name__ == "__main__":

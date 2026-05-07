@@ -301,7 +301,7 @@ def plot_policy(group, u=None, k=None, t=None, b=None, b_star=None):
     plt.show()
 
 def plot_transition_matrix(group, u=None, k=None, t=None, b=None,
-                           b_star=None, max_plots=6):
+                           b_star=None, max_plots=6, window_size=10):
 
     U, K, T = group.U, group.K, group.T
 
@@ -348,15 +348,15 @@ def plot_transition_matrix(group, u=None, k=None, t=None, b=None,
         matrix = row.reshape(U, K+1)
 
         # ---- crop k' axis ----
-        k_min = max(0, ki - 5)
-        k_max = min(K, ki + 5)
+        k_min = max(0, ki - window_size)
+        k_max = min(K, ki + window_size)
 
         outside_left = matrix[:, :k_min]
         outside_right = matrix[:, k_max+1:]
 
         if (np.any(outside_left > 1e-12) or np.any(outside_right > 1e-12)):
             raise ValueError(
-                f"Non-zero transition probability outside k±5 window "
+                f"Non-zero transition probability outside k±{window_size} window "
                 f"for (u={ui},k={ki},t={ti},b={bi})"
             )
 
@@ -364,7 +364,7 @@ def plot_transition_matrix(group, u=None, k=None, t=None, b=None,
 
         # ---- plot ----
         xticks = list(range(k_min, k_max + 1))
-        step = max(1, len(xticks)//6)
+        step = max(1, len(xticks)//(window_size + 1)) 
 
         sns.heatmap(
             matrix_cropped,
