@@ -11,8 +11,8 @@ def main():
     T = 10 # t in {0, 1, ..., 9} (time slots)         
     delta_t = 15          
     n_travelers = 9000
-    K = 100 # k in {0, 1, ..., 100} (karma levels)
-    k_init = 10 # 10 
+    K = 50 # k in {0, 1, ..., 100} (karma levels)
+    k_init = 5 # 10 
     n_groups = 1
     t_star = 8
     phi = np.array([[0.8, 0.2],
@@ -23,7 +23,7 @@ def main():
     # per hour penalty
     delta = 0.99 # discount factor  
     eta = 0.1 # smoothing weight MM will be remove 
-    alpha = 0.05 # crowdedness penalty weight
+    alpha = 1#0.05 # crowdedness penalty weight
     beta = 4/60 # early arrival weight (per minute)
     gamma = 16/60 # late arrival weight (per minute)
 
@@ -63,8 +63,8 @@ def main():
     # -------------------------------------------------------------
     # 4. Initialize the System with all travelers
     # -------------------------------------------------------------
-    first_class_capacity = 0.8 * 90 # 12 * delta_t # seat per class per departure time 
-    second_class_capacity = 810 # 48 * delta_t 
+    first_class_capacity = 70# 90 # 12 * delta_t # seat per class per departure time 
+    second_class_capacity = 630# 810 # 48 * delta_t 
 
     system = System(
         first_class_capacity=first_class_capacity,
@@ -78,7 +78,7 @@ def main():
     # 5. Simulation loop
     # -------------------------------------------------------------
     threshold = 1e-4
-    total_day = 100
+    total_day = 500
     n_day = total_day
 
     # For storing old policies: (states × actions × groups)
@@ -111,7 +111,6 @@ def main():
             total_karma += tr.k_curr # "after" redistribution
             tr.paid_karma_bid()
             
-
         assert not (np.isclose(total_karma, n_travelers * k_init) == False), f"Total karma {total_karma} does not match initial total karma {n_travelers * k_init}"
 
         # 4. Redistribution
@@ -123,7 +122,9 @@ def main():
 
         # 6. Update each group (independent policies)
         for g in groups:
+
             g.update_group_attributes(system, (total_day-n_day)) 
+
 
             g.update_state_distribution()
             g.compute_expected_value_function()

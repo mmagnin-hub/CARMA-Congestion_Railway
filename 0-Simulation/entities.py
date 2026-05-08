@@ -19,13 +19,10 @@ def _update_p(p, u_start, k_start, t_start, b_start, u_curr, k_curr, U, K, T, st
             for col in range(p.shape[1]):
                 p[row, col] /= s
                 
-        # elif s == 0: # MM uniformly distribute if no transitions observed
-        #     for col in range(p.shape[1]):
-        #         p[row, col] = 1/(p.shape[1])
     p[state_action_mask == 0, :] = 0.0 
 
-@nb.jit(nopython=True)
-def _compute_zeta(U, K, T, u_value, delta_t, t_star, beta, gamma, alpha, psi, b_star, number_of_travelers, first_class_capacity, second_class_capacity):
+@nb.jit(nopython=True) 
+def _compute_zeta(U, K, T, u_value, delta_t, t_star, beta, gamma, alpha, psi, b_star, number_of_1st_class_travelers, number_of_2nd_class_travelers, first_class_capacity, second_class_capacity, state_action_mask):
     zeta = np.zeros((U, K+1, T, K+1), dtype=np.float32)
 
     dt = np.abs(np.arange(T) - t_star) * delta_t
@@ -52,17 +49,28 @@ def _compute_zeta(U, K, T, u_value, delta_t, t_star, beta, gamma, alpha, psi, b_
 
     mask_equal = b_vals == b_star_exp
 
-    psi_exp = np.where(mask_equal, psi_exp, np.where(mask_first_class, 1.0, 0.0))
+    psi_1st_class_exp = np.where(mask_equal, psi_exp, np.where(mask_first_class, 1.0, 0.0))
+    psi_2nd_class_exp = 1 - psi_1st_class_exp
 
-    capacity = np.where(mask_equal, first_class_capacity * psi_exp + second_class_capacity * (1 - psi_exp), np.where(mask_first_class, first_class_capacity, second_class_capacity))
-
-    number_of_travelers_exp = number_of_travelers[None, None, :, None]
-
-    crowdedness_penalty = alpha * psi_exp * np.power(number_of_travelers_exp / capacity, 4)
+    number_of_1st_class_travelers_exp = number_of_1st_class_travelers[None, None, :, None]
+    number_of_2nd_class_travelers_exp = number_of_2nd_class_travelers[None, None, :, None]
+    
+    crowdedness_penalty = alpha * (psi_1st_class_exp * np.power(number_of_1st_class_travelers_exp / first_class_capacity, 4) + psi_2nd_class_exp * np.power(number_of_2nd_class_travelers_exp / second_class_capacity, 4))
 
     time_penalty = u_val * dt_exp * beta_t[None, None, :, None]
 
     zeta = - time_penalty - crowdedness_penalty
+
+    mask = state_action_mask.reshape(U, K+1, T, K+1)
+
+    # numba-compatible masking
+    for u in range(U):
+        for k1 in range(K + 1):
+            for t in range(T):
+                for k2 in range(K + 1):
+                    if mask[u, k1, t, k2] == 0:
+                        zeta[u, k1, t, k2] = -np.inf
+
 
     return zeta.reshape(-1)
 
@@ -159,19 +167,14 @@ class TravelerGroup(TravelerBase):
         b_start = np.array([tr.b for tr in self.travelers], dtype=np.int32)
         u_curr = np.array([tr.u_curr for tr in self.travelers], dtype=np.int32)
         k_curr = np.array([tr.k_curr for tr in self.travelers], dtype=np.int32)
-        # debug
-        for i in range(len(u_start)):
-            if self.travelers[i].enter_first_class and k_start[i] - b_start[i] > k_curr[i]:
-                print("Warning: observed transition where k_start - b_start > k_curr for traveler entering first class. This should not happen if travelers are correctly paying their karma bids.")
-            elif not self.travelers[i].enter_first_class and k_start[i] > k_curr[i]:
-                print("Warning: observed transition where k_start > k_curr for traveler not entering first class. This should not happen if travelers are correctly paying their karma bids.")
 
         _update_p(self.p, u_start, k_start, t_start, b_start, u_curr, k_curr, self.U, self.K, self.T, self.state_action_mask)
         return
     
     def update_immediate_reward(self, system: 'System'):
-        number_of_travelers = np.array([sum(1 for traveler in system.travelers if traveler.t == t) for t in range(self.T)], dtype=np.float32)
-        self.compute_immediate_reward(system, number_of_travelers)
+        number_of_1st_class_travelers = np.array([sum(1 for traveler in system.travelers if traveler.t == t and traveler.enter_first_class) for t in range(self.T)], dtype=np.float32)
+        number_of_2nd_class_travelers = np.array([sum(1 for traveler in system.travelers if traveler.t == t and not traveler.enter_first_class) for t in range(self.T)], dtype=np.float32)
+        self.compute_immediate_reward(system, number_of_1st_class_travelers, number_of_2nd_class_travelers)
         return
     
     def update_Q(self):
@@ -184,15 +187,15 @@ class TravelerGroup(TravelerBase):
         return
     
     def update_V(self):
-        Q_reshape = self.Q.reshape(self.pi.shape) 
-        self.V = np.sum(Q_reshape * self.pi, axis=1)
+        Q_reshape = self.Q.reshape((self.U * (self.K+1), self.T * (self.K+1))) # state, action
+        self.V = np.max(Q_reshape, axis=1) # allways choose the maximum value per state
         return
     
-    def compute_immediate_reward(self, system: 'System', number_of_travelers: np.ndarray):
+    def compute_immediate_reward(self, system: 'System', number_of_1st_class_travelers: np.ndarray, number_of_2nd_class_travelers: np.ndarray):
         '''
         TODO: optimize and adapt comments
         '''
-        self.zeta = _compute_zeta(self.U, self.K, self.T, self.u_value, self.delta_t, self.t_star, self.beta, self.gamma, self.alpha, system.psi, system.b_star, number_of_travelers, system.first_class_capacity, system.second_class_capacity)
+        self.zeta = _compute_zeta(self.U, self.K, self.T, self.u_value, self.delta_t, self.t_star, self.beta, self.gamma, self.alpha, system.psi, system.b_star, number_of_1st_class_travelers, number_of_2nd_class_travelers, system.first_class_capacity, system.second_class_capacity, self.state_action_mask)
         return 
 
     def perturbed_best_response_dynamic(self):
