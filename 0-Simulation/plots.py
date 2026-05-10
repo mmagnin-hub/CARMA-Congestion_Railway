@@ -4,24 +4,7 @@ import numpy as np
 import math
 
 
-def plot_policy_convergence(error_vec, n_day, n_groups):
-    # Keep only the rows actually used
-    error_used = error_vec[n_day:, :]  
 
-    # Reverse vertically so the first iteration is at the left
-    error_rev = error_used[::-1, :]
-
-    plt.figure(figsize=(10, 5))
-    for g in range(n_groups):
-        plt.plot(error_rev[:, g], label=f"Group t*={g}")
-
-    plt.title("Policy Convergence Error (Lower is Better)")
-    plt.xlabel("Day")
-    plt.ylabel("Policy L2 Error")
-    plt.grid(True)
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
 
 def plot_final_policies(groups, n_groups):
     plt.figure(figsize=(15, 10))
@@ -206,7 +189,12 @@ def plot_policy(group, u=None, k=None, t=None, b=None, b_star=None):
     state_indices = [ui*(K+1)+ki for ui in u_list for ki in k_list]
     action_indices = [ti*(K+1)+bi for ti in t_list for bi in b_list]
 
-    pi = group.pi[np.ix_(state_indices, action_indices)]
+    pi = group.pi[np.ix_(state_indices, action_indices)].copy()
+
+    # enhance visibility
+    for row in range(pi.shape[0]):
+        feasible_actions = np.sum(pi[row, :] > 0)
+        pi[row, :] *= (feasible_actions/(len(t_list)*len(k_list)))  # scale by fraction of feasible actions
 
     # ---- labels ----
     state_labels = []
@@ -225,9 +213,11 @@ def plot_policy(group, u=None, k=None, t=None, b=None, b_star=None):
 
     # ---- plot ----
     plt.figure(figsize=(10, 6))
-    ax = sns.heatmap(pi, cmap="viridis",
+    ax = sns.heatmap(pi, 
+                     cmap="viridis",
                      xticklabels=action_labels,
-                     yticklabels=state_labels)
+                     yticklabels=state_labels,
+                     cbar_kws={"label": "Weighted policy intensity"})
     
     # ---- Y axis (u,k) ----
     yticks = list(range(len(state_indices)))
@@ -294,7 +284,7 @@ def plot_policy(group, u=None, k=None, t=None, b=None, b_star=None):
                 x_pos = i * len(b_list) + bi_index + 0.5
                 ax.axvline(x=x_pos, color="red", linewidth=2)
 
-    plt.title("Policy Heatmap π(u,k → t,b)")
+    plt.title("Policy Intensities Weighted by Feasible Actions")
     plt.xlabel("Actions (t,b)")
     plt.ylabel("States (u,k)")
     plt.tight_layout()
@@ -384,5 +374,43 @@ def plot_transition_matrix(group, u=None, k=None, t=None, b=None,
         #ax.set_xlabel("k'")
         # ax.set_ylabel("u'")
 
+    plt.tight_layout()
+    plt.show()
+
+def plot_policy_convergence(error_vec, n_day, n_groups):
+    # Keep only the rows actually used
+    error_used = error_vec[n_day:, :]  
+
+    # Reverse vertically so the first iteration is at the left
+    error_rev = error_used[::-1, :]
+
+    plt.figure(figsize=(10, 5))
+    for g in range(n_groups):
+        plt.plot(error_rev[:, g], label=f"Group t*={g}")
+
+    plt.title("Policy Convergence Error (Lower is Better)")
+    plt.xlabel("Day")
+    plt.ylabel("Policy L2 Error")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+def plot_expected_value_convergence(value_vec, n_day, n_groups):
+    # Keep only the rows actually used
+    value_used = value_vec[n_day:, :]  
+
+    # Reverse vertically so the first iteration is at the left
+    value_rev = value_used[::-1, :]
+
+    plt.figure(figsize=(10, 5))
+    for g in range(n_groups):
+        plt.plot(value_rev[:, g], label=f"Group t*={g}")
+
+    plt.title("Expected Value Convergence (Higher is Better)")
+    plt.xlabel("Day")
+    plt.ylabel("Expected Value")
+    plt.grid(True)
+    plt.legend()
     plt.tight_layout()
     plt.show()
