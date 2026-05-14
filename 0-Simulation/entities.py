@@ -105,7 +105,7 @@ class TravelerBase(ABC):
 # TravelerGroup (shared type-level parameters and learning)
 # ==============================================================
 class TravelerGroup(TravelerBase):
-    def __init__(self, type_id: int, phi: np.ndarray,delta_t: int, t_star: int, u_value: np.ndarray, K: int, T: int, delta: float=0.9, eta: float=0.1, alpha: float=42, beta: float=42, gamma: float=42):
+    def __init__(self, type_id: int, phi: np.ndarray,delta_t: int, t_star: int, u_value: np.ndarray, K: int, T: int, delta: float=0.9, alpha: float=42, beta: float=42, gamma: float=42):
         '''
         TODO: describe all the variables
         '''
@@ -116,7 +116,6 @@ class TravelerGroup(TravelerBase):
         self.t_star = t_star
         self.u_value = np.array(u_value)
         self.delta = delta
-        self.eta = eta  
         self.U = self.u_value.shape[0]
         self.K = K
         self.T = T
@@ -149,11 +148,11 @@ class TravelerGroup(TravelerBase):
     def register(self, traveler: 'Traveler'):
         self.travelers.append(traveler)
     
-    def update_group_attributes(self, system: 'System', n_day: int):
+    def update_group_attributes(self, system: 'System', current_day: int):
         self.update_transition_matrix()
         self.update_immediate_reward(system)
         self.update_Q()
-        self.update_policy(n_day)
+        self.update_policy(current_day)
         self.update_V()
         return
 
@@ -181,9 +180,9 @@ class TravelerGroup(TravelerBase):
         self.Q = self.zeta + self.delta * np.dot(self.p, self.V) # MM sum product over the last axis of P and V
         return
     
-    def update_policy(self, n_day: int):
+    def update_policy(self, current_day: int):
         pi_tilde = self.perturbed_best_response_dynamic()
-        self.pi = self.pi + 1/(n_day + 1) * (pi_tilde - self.pi)
+        self.pi = self.pi + 1/(current_day + 1) * (pi_tilde - self.pi)
         return
     
     def update_V(self):

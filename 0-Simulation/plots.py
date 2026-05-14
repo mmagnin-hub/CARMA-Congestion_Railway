@@ -159,6 +159,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns 
 import math 
 from matplotlib.colors import LogNorm
+import plotly.graph_objects as go
 
 def plot_policy(group, u=None, k=None, t=None, b=None, b_star=None):
     """
@@ -284,7 +285,9 @@ def plot_policy(group, u=None, k=None, t=None, b=None, b_star=None):
                 x_pos = i * len(b_list) + bi_index + 0.5
                 ax.axvline(x=x_pos, color="red", linewidth=2)
 
-    plt.title("Policy Intensities Weighted by Feasible Actions")
+    plt.title(
+        "Policy Intensities Weighted by Feasible Actions\n"
+        "(scaled for cross-state comparability)")
     plt.xlabel("Actions (t,b)")
     plt.ylabel("States (u,k)")
     plt.tight_layout()
@@ -414,3 +417,366 @@ def plot_expected_value_convergence(value_vec, n_day, n_groups):
     plt.legend()
     plt.tight_layout()
     plt.show()
+
+def plot_karma_level_distribution(travelers, K):
+    k_levels = [tr.k_curr for tr in travelers]
+    plt.figure(figsize=(10, 5))
+    sns.histplot(k_levels, bins=range(K+2), kde=False)
+    plt.title("Distribution of Traveler Karma Levels")
+    plt.xlabel("Karma Level")
+    plt.ylabel("Number of Travelers")
+    plt.xticks(range(K+1))
+    plt.grid(axis='y')
+    plt.tight_layout()
+    plt.show()
+
+import numpy as np
+import plotly.graph_objects as go
+
+
+def plot_interactive_policy(group_history,
+                            traveler_type=0,
+                            u=None,
+                            k=None,
+                            t=None,
+                            b=None,
+                            b_star_history=None):
+    """
+    Interactive Plotly version of plot_policy with evolving b*.
+
+    Parameters
+    ----------
+    group_history : dict
+        Dictionary:
+            (day, traveler_type) -> group snapshot
+
+    traveler_type : int
+        Group type to visualize
+
+    u, k : int or list or None
+        State selection
+
+    t, b : int or list or None
+        Action selection
+
+    b_star_history : dict
+        Dictionary:
+            day -> list/array of optimal b values over t
+    """
+
+    # ---------------------------------------------------------
+    # available days
+    # ---------------------------------------------------------
+    available_days = sorted([
+        day for (day, gtype) in group_history.keys()
+        if gtype == traveler_type
+    ])
+
+    if len(available_days) == 0:
+        raise ValueError(
+            f"No history for traveler_type={traveler_type}"
+        )
+
+    # ---------------------------------------------------------
+    # reference group
+    # ---------------------------------------------------------
+    group0 = group_history[(available_days[0], traveler_type)]
+
+    U, K, T = group0.U, group0.K, group0.T
+
+    # ---------------------------------------------------------
+    # helpers
+    # ---------------------------------------------------------
+    def to_list(x, max_val):
+        if x is None:
+            return list(range(max_val))
+        if isinstance(x, int):
+            return [x]
+        return list(x)
+
+    u_list = to_list(u, U)
+    k_list = to_list(k, K + 1)
+    t_list = to_list(t, T)
+    b_list = to_list(b, K + 1)
+
+    state_indices = [
+        ui * (K + 1) + ki
+        for ui in u_list
+        for ki in k_list
+    ]
+
+    action_indices = [
+        ti * (K + 1) + bi
+        for ti in t_list
+        for bi in b_list
+    ]
+
+    # ---------------------------------------------------------
+    # labels
+    # ---------------------------------------------------------
+    y_labels = [
+        f"u={ui}, k={ki}"
+        for ui in u_list
+        for ki in k_list
+    ]
+
+    x_labels = [
+        f"t={ti}, b={bi}"
+        for ti in t_list
+        for bi in b_list
+    ]
+
+    # ---------------------------------------------------------
+    # global color normalization
+    # ---------------------------------------------------------
+    all_pi = []
+
+    for day in available_days:
+
+        group = group_history[(day, traveler_type)]
+
+        pi = group.pi[np.ix_(
+            state_indices,
+            action_indices
+        )].copy()
+
+        # enhance visibility
+        for row in range(pi.shape[0]):
+
+            feasible_actions = np.sum(pi[row, :] > 0)
+
+            if feasible_actions > 0:
+                pi[row, :] *= (
+                    feasible_actions /
+                    (len(t_list) * len(b_list))
+                )
+
+        all_pi.append(pi)
+
+    zmin = min(np.min(p) for p in all_pi)
+    zmax = max(np.max(p) for p in all_pi)
+
+    # ---------------------------------------------------------
+    # frames
+    # ---------------------------------------------------------
+    frames = []
+
+    for idx, day in enumerate(available_days):
+
+        group = group_history[(day, traveler_type)]
+
+        pi = all_pi[idx]
+
+        # -----------------------------------------------------
+        # heatmap
+        # -----------------------------------------------------
+        data = [
+            go.Heatmap(
+                z=pi,
+                x=x_labels,
+                y=y_labels,
+                colorscale="Viridis",
+                zmin=zmin,
+                zmax=zmax,
+
+                colorbar=dict(
+                    title="Weighted policy intensity"
+                ),
+
+                hovertemplate=(
+                    "State: %{y}<br>"
+                    "Action: %{x}<br>"
+                    "Intensity: %{z:.4f}"
+                    "<extra></extra>"
+                )
+            )
+        ]
+
+        # -----------------------------------------------------
+        # dynamic b*
+        # -----------------------------------------------------
+        shapes = []
+
+        if b_star_history is not None:
+
+            b_star_day = b_star_history.get(day, None)
+
+            if b_star_day is not None:
+
+                for i, ti in enumerate(t_list):
+
+                    if ti >= len(b_star_day):
+                        continue
+
+                    b_opt = b_star_day[ti]
+
+                    if b_opt in b_list:
+
+                        bi_index = b_list.index(b_opt)
+
+                        x_pos = (
+                            i * len(b_list)
+                            + bi_index
+                            + 0.5
+                        )
+
+                        shapes.append(
+                            dict(
+                                type="line",
+
+                                x0=x_pos,
+                                x1=x_pos,
+
+                                y0=-0.5,
+                                y1=len(y_labels) - 0.5,
+
+                                line=dict(
+                                    color="red",
+                                    width=3
+                                )
+                            )
+                        )
+
+        # -----------------------------------------------------
+        # frame
+        # -----------------------------------------------------
+        frames.append(
+            go.Frame(
+                data=data,
+                name=str(day),
+                layout=go.Layout(shapes=shapes)
+            )
+        )
+
+    # ---------------------------------------------------------
+    # figure
+    # ---------------------------------------------------------
+    fig = go.Figure(
+        data=frames[0].data,
+        frames=frames
+    )
+
+    fig.update_layout(
+
+        title=(
+            "Interactive Policy Intensities "
+            "with Dynamic Optimal b*"
+        ),
+
+        template="plotly_white",
+
+        width=1200,
+        height=700,
+
+        xaxis=dict(
+            title="Actions (t,b)",
+            tickangle=45
+        ),
+
+        yaxis=dict(
+            title="States (u,k)",
+            autorange="reversed"
+        ),
+
+        # -----------------------------------------------------
+        # slider
+        # -----------------------------------------------------
+        sliders=[{
+            "active": 0,
+
+            "currentvalue": {
+                "prefix": "Current Day: "
+            },
+
+            "pad": {"t": 50},
+
+            "steps": [
+                {
+                    "label": str(day),
+
+                    "method": "animate",
+
+                    "args": [
+                        [str(day)],
+                        {
+                            "mode": "immediate",
+
+                            "frame": {
+                                "duration": 0,
+                                "redraw": True
+                            },
+
+                            "transition": {
+                                "duration": 0
+                            }
+                        }
+                    ]
+                }
+                for day in available_days
+            ]
+        }],
+
+        # -----------------------------------------------------
+        # play/pause
+        # -----------------------------------------------------
+        updatemenus=[{
+            "type": "buttons",
+
+            "direction": "left",
+
+            "x": 0.1,
+            "y": 1.15,
+
+            "showactive": False,
+
+            "buttons": [
+
+                {
+                    "label": "Play",
+
+                    "method": "animate",
+
+                    "args": [
+                        None,
+                        {
+                            "fromcurrent": True,
+
+                            "frame": {
+                                "duration": 400,
+                                "redraw": True
+                            },
+
+                            "transition": {
+                                "duration": 0
+                            }
+                        }
+                    ]
+                },
+
+                {
+                    "label": "Pause",
+
+                    "method": "animate",
+
+                    "args": [
+                        [None],
+                        {
+                            "mode": "immediate",
+
+                            "frame": {
+                                "duration": 0,
+                                "redraw": False
+                            }
+                        }
+                    ]
+                }
+            ]
+        }]
+    )
+
+    # initial dynamic shapes
+    fig.update_layout(
+        shapes=frames[0].layout.shapes
+    )
+
+    fig.show()
