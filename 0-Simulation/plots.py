@@ -430,10 +430,6 @@ def plot_karma_level_distribution(travelers, K):
     plt.tight_layout()
     plt.show()
 
-import numpy as np
-import plotly.graph_objects as go
-
-
 def plot_interactive_policy(group_history,
                             traveler_type=0,
                             u=None,
@@ -777,6 +773,338 @@ def plot_interactive_policy(group_history,
     # initial dynamic shapes
     fig.update_layout(
         shapes=frames[0].layout.shapes
+    )
+
+    fig.show()
+
+def plot_interactive_state_value(
+    group_history,
+    expected_value_vec,
+    traveler_type=0
+):
+    """
+    Interactive Plotly visualization of:
+
+    - state distribution
+    - value function V
+
+    using two y-axes.
+
+    Parameters
+    ----------
+    group_history : dict
+        (day, traveler_type) -> group snapshot
+
+    expected_value_vec : np.ndarray
+        shape = (n_days, n_groups)
+
+    traveler_type : int
+    """
+
+    # ---------------------------------------------------------
+    # available days
+    # ---------------------------------------------------------
+    available_days = sorted([
+        day for (day, gtype) in group_history.keys()
+        if gtype == traveler_type
+    ])
+
+    if len(available_days) == 0:
+        raise ValueError(
+            f"No history for traveler_type={traveler_type}"
+        )
+
+    # ---------------------------------------------------------
+    # reference group
+    # ---------------------------------------------------------
+    group0 = group_history[(available_days[0], traveler_type)]
+
+    U = group0.U
+    K = group0.K
+
+    n_states = U * (K + 1)
+
+    expected_value_vec = expected_value_vec[::-1, :]# reverse the axpected value vector to match the day order in frames
+
+    # ---------------------------------------------------------
+    # x-axis labels
+    # ---------------------------------------------------------
+    x_vals = np.arange(n_states)
+
+    state_labels = []
+
+    for ui in range(U):
+        for ki in range(K + 1):
+            state_labels.append(f"(u={ui}, k={ki})")
+
+    # ---------------------------------------------------------
+    # global ranges
+    # ---------------------------------------------------------
+    all_dist = []
+    all_V = []
+
+    for day in available_days:
+
+        group = group_history[(day, traveler_type)]
+
+        all_dist.extend(group.state_distribution)
+        all_V.extend(group.V)
+
+    dist_min = min(all_dist)
+    dist_max = max(all_dist)
+
+    V_min = min(all_V)
+    V_max = max(all_V)
+
+    # ---------------------------------------------------------
+    # frames
+    # ---------------------------------------------------------
+    frames = []
+
+    for day in available_days:
+
+        group = group_history[(day, traveler_type)]
+
+        expected_value = expected_value_vec[
+            day - 1,
+            traveler_type
+        ]
+
+        state_distribution = group.state_distribution
+        V = group.V
+
+        frame = go.Frame(
+
+            name=str(day),
+
+            data=[
+
+                # ---------------------------------------------
+                # state distribution
+                # ---------------------------------------------
+                go.Scatter(
+                    x=x_vals,
+                    y=state_distribution,
+
+                    mode="lines",
+
+                    name="State Distribution",
+
+                    yaxis="y1",
+
+                    hovertemplate=(
+                        "State: %{text}<br>"
+                        "Distribution: %{y:.4f}"
+                        "<extra></extra>"
+                    ),
+
+                    text=state_labels
+                ),
+
+                # ---------------------------------------------
+                # value function
+                # ---------------------------------------------
+                go.Scatter(
+                    x=x_vals,
+                    y=V,
+
+                    mode="lines",
+
+                    name="Value Function",
+
+                    yaxis="y2",
+
+                    hovertemplate=(
+                        "State: %{text}<br>"
+                        "V(s): %{y:.4f}"
+                        "<extra></extra>"
+                    ),
+
+                    text=state_labels
+                )
+            ],
+
+            layout=go.Layout(
+
+                title=(
+                    f"Day {day} | "
+                    f"Expected Value = {expected_value:.4f}"
+                )
+            )
+        )
+
+        frames.append(frame)
+
+    # ---------------------------------------------------------
+    # initial figure
+    # ---------------------------------------------------------
+    fig = go.Figure(
+        data=frames[0].data,
+        frames=frames
+    )
+
+    # ---------------------------------------------------------
+    # layout
+    # ---------------------------------------------------------
+    fig.update_layout(
+
+        template="plotly_white",
+
+        width=1200,
+        height=650,
+
+        title=(
+            f"Day {available_days[0]} | "
+            f"Expected Value = "
+            f"{expected_value_vec[available_days[0], traveler_type]:.4f}"
+        ),
+
+        # -----------------------------------------------------
+        # x-axis
+        # -----------------------------------------------------
+        xaxis=dict(
+            title="Flattened State Index (u,k)",
+
+            tickmode="array",
+
+            tickvals=x_vals[::max(1, len(x_vals)//20)],
+
+            ticktext=state_labels[::max(1, len(x_vals)//20)],
+
+            tickangle=45
+        ),
+
+        # -----------------------------------------------------
+        # left y-axis
+        # -----------------------------------------------------
+        yaxis=dict(
+            title="State Distribution",
+
+            range=[
+                dist_min * 0.95,
+                dist_max * 1.05
+            ]
+        ),
+
+        # -----------------------------------------------------
+        # right y-axis
+        # -----------------------------------------------------
+        yaxis2=dict(
+            title="Value Function V",
+
+            overlaying="y",
+
+            side="right",
+
+            range=[
+                V_min * 1.05,
+                V_max * 0.95
+            ]
+        ),
+
+        legend=dict(
+            x=0.01,
+            y=0.99
+        ),
+
+        # -----------------------------------------------------
+        # slider
+        # -----------------------------------------------------
+        sliders=[{
+
+            "active": 0,
+
+            "currentvalue": {
+                "prefix": "Current Day: "
+            },
+
+            "pad": {"t": 50},
+
+            "steps": [
+
+                {
+                    "label": str(day),
+
+                    "method": "animate",
+
+                    "args": [
+                        [str(day)],
+                        {
+                            "mode": "immediate",
+
+                            "frame": {
+                                "duration": 0,
+                                "redraw": True
+                            },
+
+                            "transition": {
+                                "duration": 0
+                            }
+                        }
+                    ]
+                }
+
+                for day in available_days
+            ]
+        }],
+
+        # -----------------------------------------------------
+        # play/pause
+        # -----------------------------------------------------
+        updatemenus=[{
+
+            "type": "buttons",
+
+            "direction": "left",
+
+            "x": 0.1,
+            "y": 1.15,
+
+            "showactive": False,
+
+            "buttons": [
+
+                {
+                    "label": "Play",
+
+                    "method": "animate",
+
+                    "args": [
+                        None,
+                        {
+                            "fromcurrent": True,
+
+                            "frame": {
+                                "duration": 500,
+                                "redraw": True
+                            },
+
+                            "transition": {
+                                "duration": 0
+                            }
+                        }
+                    ]
+                },
+
+                {
+                    "label": "Pause",
+
+                    "method": "animate",
+
+                    "args": [
+                        [None],
+                        {
+                            "mode": "immediate",
+
+                            "frame": {
+                                "duration": 0,
+                                "redraw": False
+                            }
+                        }
+                    ]
+                }
+            ]
+        }]
     )
 
     fig.show()
